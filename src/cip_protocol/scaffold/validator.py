@@ -2,7 +2,7 @@
 
 Validation checks:
   - Required fields present and non-empty
-  - Applicability defines at least one tool or keyword
+  - Applicability defines at least one tool, keyword, or intent signal
   - At least one guardrail disclaimer is defined
   - Reasoning framework contains steps
   - Version string looks like a version number
@@ -53,8 +53,14 @@ def validate_scaffold_file(
                 f"{display_path}: Missing or empty required field '{field_name}'"
             )
 
-    if not scaffold.applicability.tools and not scaffold.applicability.keywords:
-        errors.append(f"{display_path}: Applicability has no tools or keywords")
+    if (
+        not scaffold.applicability.tools
+        and not scaffold.applicability.keywords
+        and not scaffold.applicability.intent_signals
+    ):
+        errors.append(
+            f"{display_path}: Applicability has no tools, keywords, or intent signals"
+        )
 
     if not scaffold.guardrails.disclaimers:
         errors.append(f"{display_path}: No guardrail disclaimers defined")

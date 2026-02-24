@@ -33,6 +33,16 @@ class GuardrailCheck:
     flags: list[str] = field(default_factory=list)
 
 
+def _contains_indicator(content_lower: str, pattern: str) -> bool:
+    """Match indicator phrases with word boundaries and flexible whitespace."""
+    normalized = " ".join(pattern.lower().split())
+    if not normalized:
+        return False
+    escaped = re.escape(normalized).replace(r"\ ", r"\s+")
+    regex = re.compile(rf"(?<!\w){escaped}(?!\w)")
+    return bool(regex.search(content_lower))
+
+
 # ---------------------------------------------------------------------------
 # Guardrail detection
 # ---------------------------------------------------------------------------
@@ -60,7 +70,7 @@ def check_guardrails(
             If None, only escalation trigger checking is performed.
     """
     flags: list[str] = []
-    content_lower = content.lower()
+    content_lower = " ".join(content.lower().split())
 
     # --- escalation triggers (soft flags) ---
     for trigger in scaffold.guardrails.escalation_triggers:
@@ -73,7 +83,7 @@ def check_guardrails(
     if prohibited_indicators:
         for action, patterns in prohibited_indicators.items():
             for pattern in patterns:
-                if pattern in content_lower:
+                if _contains_indicator(content_lower, pattern):
                     flags.append(
                         f"prohibited_pattern_detected: {action} ('{pattern}')"
                     )
@@ -123,8 +133,9 @@ def sanitize_content(
     # Redact sentences containing prohibited phrases
     sanitized = content
     for phrase in prohibited_phrases:
+        escaped_phrase = re.escape(phrase).replace(r"\ ", r"\s+")
         pattern = re.compile(
-            r"[^.!?\n]*" + re.escape(phrase) + r"[^.!?\n]*[.!?]?",
+            r"[^.!?\n]*" + escaped_phrase + r"[^.!?\n]*[.!?]?",
             re.IGNORECASE,
         )
         sanitized = pattern.sub(redaction_message, sanitized)

@@ -34,6 +34,26 @@ class TestGuardrails:
         assert not result.passed
         assert any("prohibited" in f for f in result.flags)
 
+    def test_prohibited_pattern_requires_word_boundary(self):
+        scaffold = make_test_scaffold()
+        indicators = {"plan_advice": ("plan",)}
+        result = check_guardrails(
+            "This planetary model is useful.",
+            scaffold,
+            prohibited_indicators=indicators,
+        )
+        assert result.passed
+
+    def test_prohibited_pattern_matches_with_flexible_whitespace(self):
+        scaffold = make_test_scaffold()
+        indicators = {"recommending": ("i recommend",)}
+        result = check_guardrails(
+            "If asked directly, I   recommend waiting a month.",
+            scaffold,
+            prohibited_indicators=indicators,
+        )
+        assert not result.passed
+
     def test_no_indicators_means_no_checking(self):
         scaffold = make_test_scaffold()
         result = check_guardrails(

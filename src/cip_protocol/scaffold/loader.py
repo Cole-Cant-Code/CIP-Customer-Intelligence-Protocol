@@ -58,13 +58,17 @@ def load_scaffold_file(path: Path) -> Scaffold:
     empty defaults. The `context_accepts` and `context_exports` lists
     support both 'field_name' and legacy 'field' key names.
     """
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data: dict[str, Any] = yaml.safe_load(f)
 
     applicability_data = data.get("applicability", {})
     framing_data = data.get("framing", {})
     output_data = data.get("output_calibration", {})
     guardrails_data = data.get("guardrails", {})
+    output_format = output_data.get("format", "structured_narrative")
+    output_options = output_data.get("format_options")
+    if not output_options:
+        output_options = [output_format]
 
     return Scaffold(
         id=data["id"],
@@ -86,8 +90,8 @@ def load_scaffold_file(path: Path) -> Scaffold:
         reasoning_framework=data.get("reasoning_framework", {}),
         domain_knowledge_activation=data.get("domain_knowledge_activation", []),
         output_calibration=ScaffoldOutputCalibration(
-            format=output_data.get("format", "structured_narrative"),
-            format_options=output_data.get("format_options", []),
+            format=output_format,
+            format_options=output_options,
             max_length_guidance=output_data.get("max_length_guidance", ""),
             must_include=output_data.get("must_include", []),
             never_include=output_data.get("never_include", []),

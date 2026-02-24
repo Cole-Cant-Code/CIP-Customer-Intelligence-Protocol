@@ -14,6 +14,7 @@ Scoring uses two weights:
 from __future__ import annotations
 
 import logging
+import re
 
 from cip_protocol.scaffold.models import Scaffold
 from cip_protocol.scaffold.registry import ScaffoldRegistry
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 # Scoring weights
 INTENT_WEIGHT = 2.0
 KEYWORD_WEIGHT = 1.0
+EXACT_SIGNAL_BONUS = 0.5
 
 
 def match_scaffold(
@@ -69,11 +71,23 @@ def match_scaffold(
     return None
 
 
-def _score_scaffolds(
-    scaffolds: list[Scaffold], user_input: str
-) -> Scaffold | None:
+def _tokenize(text: str) -> set[str]:
+    """Tokenize text into lowercase alphanumeric words."""
+    return set(re.findall(r"[a-z0-9']+", text.lower()))
+
+
+def _contains_phrase(haystack: str, phrase: str) -> bool:
+    """Check phrase match with word boundaries to avoid substring false positives."""
+    if not phrase:
+        return False
+    pattern = re.compile(rf"(?<!\w){re.escape(phrase.lower())}(?!\w)")
+    return bool(pattern.search(haystack))
+
+
+def _score_scaffolds(scaffolds: list[Scaffold], user_input: str) -> Scaffold | None:
     """Score all scaffolds against user input and return the best match."""
     user_lower = user_input.lower()
+    user_tokens = _tokenize(user_input)
     best_match: Scaffold | None = None
     best_score = 0.0
 
@@ -82,14 +96,19 @@ def _score_scaffolds(
 
         # Intent signal matching (higher weight)
         for signal in scaffold.applicability.intent_signals:
-            signal_words = signal.lower().split()
-            matches = sum(1 for w in signal_words if w in user_lower)
-            if matches >= len(signal_words) * 0.5:
-                score += INTENT_WEIGHT * (matches / len(signal_words))
+            signal_tokens = _tokenize(signal)
+            if not signal_tokens:
+                continue
+            matches = sum(1 for token in signal_tokens if token in user_tokens)
+            coverage = matches / len(signal_tokens)
+            if coverage >= 0.5:
+                score += INTENT_WEIGHT * coverage
+            if _contains_phrase(user_lower, signal):
+                score += EXACT_SIGNAL_BONUS
 
         # Keyword matching
         for kw in scaffold.applicability.keywords:
-            if kw.lower() in user_lower:
+            if _contains_phrase(user_lower, kw):
                 score += KEYWORD_WEIGHT
 
         if score > best_score:

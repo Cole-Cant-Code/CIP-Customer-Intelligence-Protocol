@@ -56,15 +56,12 @@ def render_scaffold(
         data_context_label=data_context_label,
     )
 
-    effective_tone = (
-        tone_variant
-        if tone_variant in scaffold.framing.tone_variants
-        else None
-    )
+    effective_tone = tone_variant if tone_variant in scaffold.framing.tone_variants else None
+    allowed_formats = scaffold.output_calibration.format_options or [
+        scaffold.output_calibration.format
+    ]
     effective_format = (
-        output_format
-        if output_format in scaffold.output_calibration.format_options
-        else scaffold.output_calibration.format
+        output_format if output_format in allowed_formats else scaffold.output_calibration.format
     )
 
     return AssembledPrompt(
@@ -110,11 +107,10 @@ def _build_system_message(
         parts.append(f"## Domain Knowledge to Apply\n{knowledge}")
 
     # Output calibration
-    fmt = (
-        output_format
-        if output_format in scaffold.output_calibration.format_options
-        else scaffold.output_calibration.format
-    )
+    allowed_formats = scaffold.output_calibration.format_options or [
+        scaffold.output_calibration.format
+    ]
+    fmt = output_format if output_format in allowed_formats else scaffold.output_calibration.format
     parts.append(f"## Output Format\nFormat: {fmt}")
     if scaffold.output_calibration.max_length_guidance:
         parts.append(

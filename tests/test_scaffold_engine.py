@@ -121,3 +121,18 @@ class TestScaffoldMatching:
             user_input="I want to create a budget for next month",
         )
         assert scaffold.id == "intent_match"
+
+    def test_keyword_matching_uses_word_boundaries(self):
+        registry = ScaffoldRegistry()
+        registry.register(
+            make_test_scaffold(
+                "keyword_plan",
+                tools=[],
+                keywords=["plan"],
+                intent_signals=[],
+            )
+        )
+        engine = ScaffoldEngine(registry, config=make_test_config(default_scaffold_id=None))
+
+        with pytest.raises(ScaffoldNotFoundError):
+            engine.select(tool_name="no_match", user_input="planetary motion is stable")
