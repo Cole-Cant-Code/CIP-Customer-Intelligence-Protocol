@@ -1,14 +1,4 @@
-"""Scaffold engine -- orchestrates selection and application of scaffolds.
-
-This is the main entry point for the scaffold system. It implements the
-Negotiated Expertise Pattern:
-  1. select() finds the right scaffold for a given tool/input combination
-  2. apply() renders that scaffold into a complete LLM prompt
-
-The engine owns the fallback logic: if no scaffold matches, it tries the
-domain's default_scaffold_id from the DomainConfig. If that also fails,
-it raises ScaffoldNotFoundError so the caller can handle the situation.
-"""
+"""Scaffold engine — select() finds the right scaffold, apply() renders it."""
 
 from __future__ import annotations
 
@@ -26,24 +16,10 @@ logger = logging.getLogger(__name__)
 
 
 class ScaffoldNotFoundError(Exception):
-    """Raised when no scaffold can be selected for a request."""
+    pass
 
 
 class ScaffoldEngine:
-    """Selects the right scaffold and assembles it into an LLM prompt.
-
-    This is the core of the Negotiated Expertise Pattern: the engine
-    mediates between the caller's intent and the available scaffolds,
-    selecting the best reasoning framework and rendering it into a
-    prompt that shapes the inner LLM's behavior.
-
-    Args:
-        registry: The scaffold registry to search.
-        config: Domain configuration. Provides default_scaffold_id and
-            data_context_label.  If None, no default fallback is used
-            and data context is labeled generically.
-    """
-
     def __init__(
         self,
         registry: ScaffoldRegistry,
@@ -52,7 +28,7 @@ class ScaffoldEngine:
     ) -> None:
         self.registry = registry
         self.config = config
-        self.telemetry_sink = telemetry_sink or NoOpTelemetrySink()
+        self.telemetry = telemetry_sink or NoOpTelemetrySink()
 
     def select(
         self,
@@ -60,11 +36,6 @@ class ScaffoldEngine:
         user_input: str = "",
         caller_scaffold_id: str | None = None,
     ) -> Scaffold:
-        """Select the best scaffold for this invocation.
-
-        Falls back to config.default_scaffold_id if no match is found.
-        Raises ScaffoldNotFoundError if no scaffold matches and no default exists.
-        """
         scaffold = match_scaffold(
             registry=self.registry,
             tool_name=tool_name,
@@ -73,16 +44,14 @@ class ScaffoldEngine:
         )
 
         if scaffold:
-            self.telemetry_sink.emit(
-                TelemetryEvent(
-                    name="scaffold.select",
-                    attributes={
-                        "tool_name": tool_name,
-                        "selected_scaffold_id": scaffold.id,
-                        "selection_mode": "matched",
-                    },
-                )
-            )
+            self.telemetry.emit(TelemetryEvent(
+                name="scaffold.select",
+                attributes={
+                    "tool_name": tool_name,
+                    "selected_scaffold_id": scaffold.id,
+                    "selection_mode": "matched",
+                },
+            ))
             return scaffold
 
         # Fall back to domain default
@@ -90,17 +59,14 @@ class ScaffoldEngine:
         if default_id:
             default = self.registry.get(default_id)
             if default:
-                logger.info("Using default scaffold: %s", default_id)
-                self.telemetry_sink.emit(
-                    TelemetryEvent(
-                        name="scaffold.select",
-                        attributes={
-                            "tool_name": tool_name,
-                            "selected_scaffold_id": default.id,
-                            "selection_mode": "default",
-                        },
-                    )
-                )
+                self.telemetry.emit(TelemetryEvent(
+                    name="scaffold.select",
+                    attributes={
+                        "tool_name": tool_name,
+                        "selected_scaffold_id": default.id,
+                        "selection_mode": "default",
+                    },
+                ))
                 return default
 
         raise ScaffoldNotFoundError(
@@ -119,18 +85,15 @@ class ScaffoldEngine:
         tone_variant: str | None = None,
         output_format: str | None = None,
     ) -> AssembledPrompt:
-        """Combine scaffold + user query + data into a complete LLM prompt."""
         label = self.config.data_context_label if self.config else "Data Context"
-        self.telemetry_sink.emit(
-            TelemetryEvent(
-                name="scaffold.apply",
-                attributes={
-                    "scaffold_id": scaffold.id,
-                    "user_query_length": len(user_query),
-                    "data_context_keys": sorted(data_context.keys()),
-                },
-            )
-        )
+        self.telemetry.emit(TelemetryEvent(
+            name="scaffold.apply",
+            attributes={
+                "scaffold_id": scaffold.id,
+                "user_query_length": len(user_query),
+                "data_context_keys": sorted(data_context.keys()),
+            },
+        ))
         return render_scaffold(
             scaffold=scaffold,
             user_query=user_query,

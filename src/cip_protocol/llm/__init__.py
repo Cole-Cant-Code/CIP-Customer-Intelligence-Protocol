@@ -1,5 +1,3 @@
-"""LLM subsystem — inner specialist invocation, guardrails, and telemetry hooks."""
-
 from cip_protocol.llm.client import InnerLLMClient, LLMResponse, StreamEvent
 from cip_protocol.llm.provider import (
     HistoryMessage,
@@ -21,15 +19,15 @@ from cip_protocol.llm.response import (
 )
 
 __all__ = [
+    "GuardrailCheck",
     "GuardrailEvaluation",
     "GuardrailEvaluator",
-    "GuardrailCheck",
     "HistoryMessage",
     "InnerLLMClient",
     "LLMProvider",
     "LLMResponse",
-    "ProviderResponse",
     "ProhibitedPatternEvaluator",
+    "ProviderResponse",
     "RegexPolicyEvaluator",
     "StreamEvent",
     "check_guardrails",

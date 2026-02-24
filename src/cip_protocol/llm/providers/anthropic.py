@@ -1,8 +1,3 @@
-"""Anthropic Claude provider.
-
-Wraps the ``anthropic`` SDK's async client behind the LLMProvider protocol.
-"""
-
 from __future__ import annotations
 
 import time
@@ -12,22 +7,17 @@ from cip_protocol.llm.provider import ProviderResponse
 
 
 class AnthropicProvider:
-    """Claude provider using the Anthropic SDK."""
-
-    def __init__(
-        self, api_key: str, model: str = "claude-sonnet-4-20250514"
-    ) -> None:
+    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514") -> None:
         import anthropic
 
         self.client = anthropic.AsyncAnthropic(api_key=api_key)
         self.model = model
 
     @staticmethod
-    def _build_messages(
+    def _messages(
         user_message: str,
         chat_history: list[dict[str, str]] | None = None,
     ) -> list[dict[str, str]]:
-        """Build Anthropic messages (user/assistant turns only)."""
         messages: list[dict[str, str]] = []
         for item in chat_history or []:
             role = item.get("role", "").strip()
@@ -51,17 +41,14 @@ class AnthropicProvider:
             max_tokens=max_tokens,
             temperature=temperature,
             system=system_message,
-            messages=self._build_messages(user_message, chat_history),
+            messages=self._messages(user_message, chat_history),
         )
-        elapsed_ms = (time.monotonic() - start) * 1000
-
-        content = response.content[0].text if response.content else ""
         return ProviderResponse(
-            content=content,
+            content=response.content[0].text if response.content else "",
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
             model=self.model,
-            latency_ms=elapsed_ms,
+            latency_ms=(time.monotonic() - start) * 1000,
         )
 
     async def generate_stream(
@@ -72,26 +59,21 @@ class AnthropicProvider:
         max_tokens: int = 2048,
         temperature: float = 0.3,
     ) -> AsyncIterator[str]:
-        """Yield streaming text chunks from Anthropic messages API."""
         try:
             async with self.client.messages.stream(
                 model=self.model,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 system=system_message,
-                messages=self._build_messages(user_message, chat_history),
+                messages=self._messages(user_message, chat_history),
             ) as stream:
                 async for text in stream.text_stream:
                     if text:
                         yield text
         except AttributeError:
-            # Fallback for SDK variants without stream helper.
+            # SDK variant without stream helper — fall back to full generate
             response = await self.generate(
-                system_message=system_message,
-                user_message=user_message,
-                chat_history=chat_history,
-                max_tokens=max_tokens,
-                temperature=temperature,
+                system_message, user_message, chat_history, max_tokens, temperature,
             )
             if response.content:
                 yield response.content

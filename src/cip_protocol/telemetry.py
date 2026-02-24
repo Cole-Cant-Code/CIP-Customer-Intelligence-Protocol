@@ -1,5 +1,3 @@
-"""Structured telemetry primitives for CIP protocol components."""
-
 from __future__ import annotations
 
 import logging
@@ -10,8 +8,6 @@ from typing import Any, Protocol, runtime_checkable
 
 @dataclass
 class TelemetryEvent:
-    """Single structured telemetry event."""
-
     name: str
     attributes: dict[str, Any] = field(default_factory=dict)
     timestamp_ms: float = field(default_factory=lambda: time.time() * 1000)
@@ -19,23 +15,15 @@ class TelemetryEvent:
 
 @runtime_checkable
 class TelemetrySink(Protocol):
-    """Telemetry sink protocol."""
-
-    def emit(self, event: TelemetryEvent) -> None:
-        """Emit a telemetry event."""
-        raise NotImplementedError
+    def emit(self, event: TelemetryEvent) -> None: ...
 
 
 class NoOpTelemetrySink:
-    """Default sink that records nothing."""
-
     def emit(self, event: TelemetryEvent) -> None:
-        _ = event
+        pass
 
 
 class InMemoryTelemetrySink:
-    """Test-friendly sink that stores events in memory."""
-
     def __init__(self) -> None:
         self.events: list[TelemetryEvent] = []
 
@@ -44,8 +32,6 @@ class InMemoryTelemetrySink:
 
 
 class LoggerTelemetrySink:
-    """Sink that emits structured events through Python logging."""
-
     def __init__(self, logger_name: str = "cip_protocol.telemetry") -> None:
         self.logger = logging.getLogger(logger_name)
 

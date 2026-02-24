@@ -1,5 +1,3 @@
-"""Pydantic models for cognitive scaffolds and assembled prompts."""
-
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -8,26 +6,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 class _StrictModel(BaseModel):
-    """Shared strict model settings for scaffold contracts."""
-
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
 
 def _normalize_string_list(values: list[str]) -> list[str]:
-    """Trim whitespace and drop empty entries while preserving order."""
-    normalized: list[str] = []
-    for value in values:
-        if not isinstance(value, str):
-            continue
-        cleaned = value.strip()
-        if cleaned:
-            normalized.append(cleaned)
-    return normalized
+    return [v.strip() for v in values if isinstance(v, str) and v.strip()]
 
 
 class ScaffoldApplicability(_StrictModel):
-    """Defines when a scaffold should be selected."""
-
     tools: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
     intent_signals: list[str] = Field(default_factory=list)
@@ -39,8 +25,6 @@ class ScaffoldApplicability(_StrictModel):
 
 
 class ScaffoldFraming(_StrictModel):
-    """The cognitive framing the inner LLM adopts."""
-
     role: str = ""
     perspective: str = ""
     tone: str = ""
@@ -54,18 +38,10 @@ class ScaffoldFraming(_StrictModel):
     @field_validator("tone_variants")
     @classmethod
     def normalize_tone_variants(cls, variants: dict[str, str]) -> dict[str, str]:
-        cleaned: dict[str, str] = {}
-        for key, value in variants.items():
-            key_norm = key.strip()
-            value_norm = value.strip()
-            if key_norm and value_norm:
-                cleaned[key_norm] = value_norm
-        return cleaned
+        return {k.strip(): v.strip() for k, v in variants.items() if k.strip() and v.strip()}
 
 
 class ScaffoldOutputCalibration(_StrictModel):
-    """Controls the shape and content of LLM output."""
-
     format: str = "structured_narrative"
     format_options: list[str] = Field(default_factory=lambda: ["structured_narrative"])
     max_length_guidance: str = ""
@@ -94,8 +70,6 @@ class ScaffoldOutputCalibration(_StrictModel):
 
 
 class ScaffoldGuardrails(_StrictModel):
-    """Safety boundaries for the inner LLM."""
-
     disclaimers: list[str] = Field(default_factory=list)
     escalation_triggers: list[str] = Field(default_factory=list)
     prohibited_actions: list[str] = Field(default_factory=list)
@@ -107,8 +81,6 @@ class ScaffoldGuardrails(_StrictModel):
 
 
 class ContextField(_StrictModel):
-    """A single cross-domain context field definition."""
-
     field_name: str
     type: str
     description: str = ""
@@ -120,8 +92,6 @@ class ContextField(_StrictModel):
 
 
 class Scaffold(_StrictModel):
-    """A complete cognitive scaffold reasoning framework."""
-
     id: str
     version: str
     domain: str
@@ -150,22 +120,15 @@ class Scaffold(_StrictModel):
     @field_validator("reasoning_framework")
     @classmethod
     def validate_reasoning_framework(cls, value: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(value, dict):
-            raise ValueError("reasoning_framework must be a mapping")
         steps = value.get("steps")
         if steps is None:
             return value
         if not isinstance(steps, list):
             raise ValueError("reasoning_framework.steps must be a list")
-        normalized_steps = _normalize_string_list(steps)
-        value = dict(value)
-        value["steps"] = normalized_steps
-        return value
+        return {**value, "steps": _normalize_string_list(steps)}
 
 
 class ChatMessage(_StrictModel):
-    """Single turn in conversation history."""
-
     role: Literal["system", "user", "assistant", "tool"]
     content: str
 
@@ -176,8 +139,6 @@ class ChatMessage(_StrictModel):
 
 
 class AssembledPrompt(_StrictModel):
-    """The final prompt payload sent to the inner LLM."""
-
     system_message: str
     user_message: str
     metadata: dict[str, Any] = Field(default_factory=dict)

@@ -1,15 +1,3 @@
-"""CIP Protocol — Customer Intelligence Protocol framework.
-
-The protocol provides domain-agnostic infrastructure for building
-consumer-facing MCP servers.  Domains plug in via DomainConfig.
-
-Public API::
-
-    from cip_protocol import DomainConfig
-    from cip_protocol.scaffold import ScaffoldEngine, ScaffoldRegistry, load_scaffold_directory
-    from cip_protocol.llm import InnerLLMClient, create_provider
-"""
-
 from cip_protocol.domain import DomainConfig
 from cip_protocol.telemetry import (
     InMemoryTelemetrySink,

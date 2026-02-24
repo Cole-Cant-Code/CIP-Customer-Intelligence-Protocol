@@ -1,9 +1,3 @@
-"""Mock LLM provider for testing.
-
-Returns canned responses and records call metadata so tests can assert
-on the system/user messages and invocation count.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -13,8 +7,6 @@ from cip_protocol.llm.provider import ProviderResponse
 
 
 class MockProvider:
-    """Mock provider for testing -- returns a canned response."""
-
     def __init__(self, response_content: str = "Mock LLM response.") -> None:
         self.response_content = response_content
         self.last_system_message: str = ""
@@ -50,8 +42,6 @@ class MockProvider:
         max_tokens: int = 2048,
         temperature: float = 0.3,
     ) -> AsyncIterator[str]:
-        """Yield canned content in deterministic token chunks."""
-        _ = max_tokens, temperature
         self.last_system_message = system_message
         self.last_user_message = user_message
         self.last_chat_history = chat_history or []

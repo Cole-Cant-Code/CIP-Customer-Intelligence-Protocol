@@ -1,8 +1,3 @@
-"""OpenAI GPT provider.
-
-Wraps the ``openai`` SDK's async client behind the LLMProvider protocol.
-"""
-
 from __future__ import annotations
 
 import time
@@ -12,8 +7,6 @@ from cip_protocol.llm.provider import ProviderResponse
 
 
 class OpenAIProvider:
-    """OpenAI provider using the OpenAI SDK."""
-
     def __init__(self, api_key: str, model: str = "gpt-4o") -> None:
         import openai
 
@@ -21,12 +14,11 @@ class OpenAIProvider:
         self.model = model
 
     @staticmethod
-    def _build_messages(
+    def _messages(
         system_message: str,
         user_message: str,
         chat_history: list[dict[str, str]] | None = None,
     ) -> list[dict[str, str]]:
-        """Build OpenAI chat messages preserving prior turns."""
         messages: list[dict[str, str]] = [{"role": "system", "content": system_message}]
         for item in chat_history or []:
             role = item.get("role", "").strip()
@@ -49,19 +41,16 @@ class OpenAIProvider:
             model=self.model,
             max_tokens=max_tokens,
             temperature=temperature,
-            messages=self._build_messages(system_message, user_message, chat_history),
+            messages=self._messages(system_message, user_message, chat_history),
         )
-        elapsed_ms = (time.monotonic() - start) * 1000
-
         choice = response.choices[0] if response.choices else None
-        content = choice.message.content or "" if choice else ""
         usage = response.usage
         return ProviderResponse(
-            content=content,
+            content=choice.message.content or "" if choice else "",
             input_tokens=usage.prompt_tokens if usage else 0,
             output_tokens=usage.completion_tokens if usage else 0,
             model=self.model,
-            latency_ms=elapsed_ms,
+            latency_ms=(time.monotonic() - start) * 1000,
         )
 
     async def generate_stream(
@@ -72,12 +61,11 @@ class OpenAIProvider:
         max_tokens: int = 2048,
         temperature: float = 0.3,
     ) -> AsyncIterator[str]:
-        """Yield streaming text chunks from OpenAI chat completions."""
         stream = await self.client.chat.completions.create(
             model=self.model,
             max_tokens=max_tokens,
             temperature=temperature,
-            messages=self._build_messages(system_message, user_message, chat_history),
+            messages=self._messages(system_message, user_message, chat_history),
             stream=True,
         )
         async for chunk in stream:

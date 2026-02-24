@@ -1,5 +1,3 @@
-"""Inner LLM client bridging scaffold prompts, providers, guardrails, and telemetry."""
-
 from __future__ import annotations
 
 import logging
@@ -25,8 +23,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LLMResponse:
-    """Structured response from the inner specialist LLM."""
-
     content: str
     scaffold_id: str
     scaffold_version: str
@@ -37,16 +33,12 @@ class LLMResponse:
 
 @dataclass
 class StreamEvent:
-    """Streaming event emitted by invoke_stream."""
-
     event: str
     text: str = ""
     response: LLMResponse | None = None
 
 
 class InnerLLMClient:
-    """Invokes the inner specialist LLM with scaffold-assembled prompts."""
-
     def __init__(
         self,
         provider: LLMProvider,
@@ -57,81 +49,121 @@ class InnerLLMClient:
         self.provider = provider
         self.config = config
         self.guardrail_evaluators = guardrail_evaluators
-        self.telemetry_sink = telemetry_sink or NoOpTelemetrySink()
+        self.telemetry = telemetry_sink or NoOpTelemetrySink()
 
-    def _build_full_system_prompt(self, scaffold_system_message: str) -> str:
-        """Combine domain system prompt with scaffold-specific instructions."""
+    def _build_system_prompt(self, scaffold_system_message: str) -> str:
         if not self.config or not self.config.system_prompt:
             return scaffold_system_message
-
-        return f"""{self.config.system_prompt}
-
----
-
-{scaffold_system_message}"""
+        return f"{self.config.system_prompt}\n\n---\n\n{scaffold_system_message}"
 
     @staticmethod
-    def _normalize_chat_history(
+    def _normalize_history(
         chat_history: list[ChatMessage | HistoryMessage] | None,
     ) -> list[HistoryMessage]:
         if not chat_history:
             return []
-
-        normalized: list[HistoryMessage] = []
+        result: list[HistoryMessage] = []
         for item in chat_history:
             if isinstance(item, ChatMessage):
-                role = item.role
-                content = item.content
+                role, content = item.role, item.content
             else:
                 role = str(item.get("role", "")).strip()
                 content = str(item.get("content", ""))
             if role and content:
-                normalized.append({"role": role, "content": content})
-        return normalized
+                result.append({"role": role, "content": content})
+        return result
 
-    def _resolve_chat_history(
+    def _resolve_history(
         self,
-        assembled_prompt: AssembledPrompt,
+        prompt: AssembledPrompt,
         chat_history: list[ChatMessage | HistoryMessage] | None,
     ) -> list[HistoryMessage]:
-        source = chat_history if chat_history is not None else assembled_prompt.chat_history
-        return self._normalize_chat_history(source)
+        source = chat_history if chat_history is not None else prompt.chat_history
+        return self._normalize_history(source)
 
     def _resolve_evaluators(self) -> list[GuardrailEvaluator]:
         if self.guardrail_evaluators is not None:
             return self.guardrail_evaluators
         prohibited = self.config.prohibited_indicators if self.config else None
-        regex_policies = self.config.regex_guardrail_policies if self.config else None
-        return default_guardrail_evaluators(prohibited, regex_policies)
+        regex = self.config.regex_guardrail_policies if self.config else None
+        return default_guardrail_evaluators(prohibited, regex)
 
-    def _emit(self, name: str, **attributes: Any) -> None:
-        self.telemetry_sink.emit(TelemetryEvent(name=name, attributes=attributes))
+    @property
+    def _redaction_message(self) -> str:
+        if self.config:
+            return self.config.redaction_message
+        return "[Removed: contains prohibited content]"
+
+    def _emit(self, name: str, **attrs: Any) -> None:
+        self.telemetry.emit(TelemetryEvent(name=name, attributes=attrs))
+
+    def _postprocess(
+        self,
+        raw_content: str,
+        scaffold: Scaffold,
+        evaluators: list[GuardrailEvaluator],
+        data_context: dict[str, Any] | None,
+    ) -> tuple[str, list[str], dict[str, Any], bool]:
+        """Run guardrails, sanitize, disclaimers, provenance, context exports.
+
+        Returns (content, flags, context_exports, guardrails_passed).
+        """
+        guardrail_check = check_guardrails(raw_content, scaffold, evaluators=evaluators)
+
+        content = sanitize_content(
+            raw_content, guardrail_check, redaction_message=self._redaction_message
+        )
+
+        if not guardrail_check.passed:
+            self._emit(
+                "llm.guardrail.intervention",
+                scaffold_id=scaffold.id,
+                hard_violations=guardrail_check.hard_violations,
+                matched_phrases=guardrail_check.matched_phrases,
+            )
+
+        content, disclaimer_flags = enforce_disclaimers(content, scaffold)
+        content = self._append_provenance(content, data_context)
+
+        context_exports = extract_context_exports(
+            content=content,
+            scaffold=scaffold,
+            data_context=data_context or {},
+        )
+
+        flags = guardrail_check.flags + disclaimer_flags
+        return content, flags, context_exports, guardrail_check.passed
 
     @staticmethod
     def _append_provenance(content: str, data_context: dict[str, Any] | None) -> str:
         if not data_context:
             return content
-
         source = data_context.get("data_source")
+        if not source or "Data source:" in content:
+            return content
+
+        footer = ["", "", "---", f"Data source: {source}"]
         note = data_context.get("data_source_note")
-        if source and "Data source:" not in content:
-            footer_lines = ["", "", "---", f"Data source: {source}"]
-            if note:
-                footer_lines.append(f"Note: {note}")
-            return content + "\n".join(footer_lines)
+        if note:
+            footer.append(f"Note: {note}")
+        return content + "\n".join(footer)
 
-        return content
-
-    @staticmethod
-    def _estimate_input_tokens(
-        system_message: str,
-        user_message: str,
-        chat_history: list[HistoryMessage],
-    ) -> int:
-        text_parts = [system_message, user_message]
-        for item in chat_history:
-            text_parts.append(item.get("content", ""))
-        return len(" ".join(text_parts).split())
+    def _build_response(
+        self,
+        content: str,
+        scaffold: Scaffold,
+        flags: list[str],
+        context_exports: dict[str, Any],
+        usage: dict[str, int],
+    ) -> LLMResponse:
+        return LLMResponse(
+            content=content,
+            scaffold_id=scaffold.id,
+            scaffold_version=scaffold.version,
+            guardrail_flags=flags,
+            context_exports=context_exports,
+            usage=usage,
+        )
 
     async def invoke(
         self,
@@ -142,100 +174,46 @@ class InnerLLMClient:
         max_tokens: int = 2048,
         temperature: float = 0.3,
     ) -> LLMResponse:
-        """Call provider, apply guardrails, and return post-processed response."""
-        full_system = self._build_full_system_prompt(assembled_prompt.system_message)
-        normalized_history = self._resolve_chat_history(assembled_prompt, chat_history)
+        full_system = self._build_system_prompt(assembled_prompt.system_message)
+        history = self._resolve_history(assembled_prompt, chat_history)
         evaluators = self._resolve_evaluators()
 
         self._emit(
             "llm.invoke.start",
             scaffold_id=scaffold.id,
             scaffold_version=scaffold.version,
-            history_turns=len(normalized_history),
+            history_turns=len(history),
             max_tokens=max_tokens,
             temperature=temperature,
             evaluator_count=len(evaluators),
         )
 
-        provider_response: ProviderResponse = await self.provider.generate(
+        resp: ProviderResponse = await self.provider.generate(
             system_message=full_system,
             user_message=assembled_prompt.user_message,
-            chat_history=normalized_history,
+            chat_history=history,
             max_tokens=max_tokens,
             temperature=temperature,
         )
 
-        logger.info(
-            "Inner LLM call: scaffold=%s, model=%s, tokens=%d+%d, latency=%.0fms",
-            scaffold.id,
-            provider_response.model,
-            provider_response.input_tokens,
-            provider_response.output_tokens,
-            provider_response.latency_ms,
-        )
-
-        guardrail_check = check_guardrails(
-            provider_response.content,
-            scaffold,
-            evaluators=evaluators,
-        )
-
-        redaction_msg = (
-            self.config.redaction_message
-            if self.config
-            else "[Removed: contains prohibited content]"
-        )
-        content = sanitize_content(
-            provider_response.content,
-            guardrail_check,
-            redaction_message=redaction_msg,
-        )
-
-        if not guardrail_check.passed:
-            self._emit(
-                "llm.guardrail.intervention",
-                scaffold_id=scaffold.id,
-                hard_violations=guardrail_check.hard_violations,
-                matched_phrases=guardrail_check.matched_phrases,
-            )
-            logger.warning(
-                "Guardrails enforced on scaffold %s: %d hard violations",
-                scaffold.id,
-                len(guardrail_check.hard_violations),
-            )
-
-        content, disclaimer_flags = enforce_disclaimers(content, scaffold)
-        content = self._append_provenance(content, data_context)
-
-        context_exports = extract_context_exports(
-            content=content,
-            scaffold=scaffold,
-            data_context=data_context or {},
-        )
-
-        response = LLMResponse(
-            content=content,
-            scaffold_id=scaffold.id,
-            scaffold_version=scaffold.version,
-            guardrail_flags=guardrail_check.flags + disclaimer_flags,
-            context_exports=context_exports,
-            usage={
-                "input_tokens": provider_response.input_tokens,
-                "output_tokens": provider_response.output_tokens,
-            },
+        content, flags, exports, _ = self._postprocess(
+            resp.content, scaffold, evaluators, data_context
         )
 
         self._emit(
             "llm.invoke.complete",
             scaffold_id=scaffold.id,
-            model=provider_response.model,
-            input_tokens=provider_response.input_tokens,
-            output_tokens=provider_response.output_tokens,
-            latency_ms=provider_response.latency_ms,
-            guardrail_flag_count=len(response.guardrail_flags),
+            model=resp.model,
+            input_tokens=resp.input_tokens,
+            output_tokens=resp.output_tokens,
+            latency_ms=resp.latency_ms,
+            guardrail_flag_count=len(flags),
         )
 
-        return response
+        return self._build_response(
+            content, scaffold, flags, exports,
+            {"input_tokens": resp.input_tokens, "output_tokens": resp.output_tokens},
+        )
 
     async def invoke_stream(
         self,
@@ -246,22 +224,16 @@ class InnerLLMClient:
         max_tokens: int = 2048,
         temperature: float = 0.3,
     ):
-        """Stream provider output with incremental guardrail checks.
-
-        Yields:
-            StreamEvent(event="chunk", text=...)
-            StreamEvent(event="halted", text=..., response=...) when halted early
-            StreamEvent(event="final", text=..., response=...) on normal completion
-        """
-        full_system = self._build_full_system_prompt(assembled_prompt.system_message)
-        normalized_history = self._resolve_chat_history(assembled_prompt, chat_history)
+        """Yield StreamEvents: chunk → (halted | final)."""
+        full_system = self._build_system_prompt(assembled_prompt.system_message)
+        history = self._resolve_history(assembled_prompt, chat_history)
         evaluators = self._resolve_evaluators()
 
         started = time.monotonic()
         self._emit(
             "llm.stream.start",
             scaffold_id=scaffold.id,
-            history_turns=len(normalized_history),
+            history_turns=len(history),
             evaluator_count=len(evaluators),
         )
 
@@ -269,7 +241,7 @@ class InnerLLMClient:
         async for chunk in self.provider.generate_stream(
             system_message=full_system,
             user_message=assembled_prompt.user_message,
-            chat_history=normalized_history,
+            chat_history=history,
             max_tokens=max_tokens,
             temperature=temperature,
         ):
@@ -277,92 +249,47 @@ class InnerLLMClient:
                 continue
 
             collected.append(chunk)
-            current = "".join(collected)
-            guardrail_check = check_guardrails(current, scaffold, evaluators=evaluators)
-            if not guardrail_check.passed:
-                redaction_msg = (
-                    self.config.redaction_message
-                    if self.config
-                    else "[Removed: contains prohibited content]"
-                )
-                content = sanitize_content(
-                    current,
-                    guardrail_check,
-                    redaction_message=redaction_msg,
-                )
-                content, disclaimer_flags = enforce_disclaimers(content, scaffold)
-                content = self._append_provenance(content, data_context)
-                context_exports = extract_context_exports(
-                    content=content,
-                    scaffold=scaffold,
-                    data_context=data_context or {},
-                )
 
-                response = LLMResponse(
-                    content=content,
-                    scaffold_id=scaffold.id,
-                    scaffold_version=scaffold.version,
-                    guardrail_flags=guardrail_check.flags + disclaimer_flags,
-                    context_exports=context_exports,
-                    usage={
-                        "input_tokens": self._estimate_input_tokens(
-                            full_system,
-                            assembled_prompt.user_message,
-                            normalized_history,
-                        ),
-                        "output_tokens": len(content.split()),
-                    },
-                )
-
+            # Check guardrails incrementally
+            content, flags, exports, passed = self._postprocess(
+                "".join(collected), scaffold, evaluators, data_context
+            )
+            if not passed:
                 self._emit(
                     "llm.stream.halted",
                     scaffold_id=scaffold.id,
-                    hard_violations=guardrail_check.hard_violations,
                     elapsed_ms=(time.monotonic() - started) * 1000,
                 )
-                yield StreamEvent(event="halted", text=content, response=response)
+                yield StreamEvent(
+                    event="halted",
+                    text=content,
+                    response=self._build_response(
+                        content, scaffold, flags, exports,
+                        {"input_tokens": 0, "output_tokens": len(content.split())},
+                    ),
+                )
                 return
 
             yield StreamEvent(event="chunk", text=chunk)
 
-        final_raw = "".join(collected).strip()
-        guardrail_check = check_guardrails(final_raw, scaffold, evaluators=evaluators)
-        redaction_msg = (
-            self.config.redaction_message
-            if self.config
-            else "[Removed: contains prohibited content]"
-        )
-        content = sanitize_content(final_raw, guardrail_check, redaction_message=redaction_msg)
-        content, disclaimer_flags = enforce_disclaimers(content, scaffold)
-        content = self._append_provenance(content, data_context)
-        context_exports = extract_context_exports(
-            content=content,
-            scaffold=scaffold,
-            data_context=data_context or {},
-        )
-
-        response = LLMResponse(
-            content=content,
-            scaffold_id=scaffold.id,
-            scaffold_version=scaffold.version,
-            guardrail_flags=guardrail_check.flags + disclaimer_flags,
-            context_exports=context_exports,
-            usage={
-                "input_tokens": self._estimate_input_tokens(
-                    full_system,
-                    assembled_prompt.user_message,
-                    normalized_history,
-                ),
-                "output_tokens": len(content.split()),
-            },
+        # Final pass on complete content
+        content, flags, exports, _ = self._postprocess(
+            "".join(collected).strip(), scaffold, evaluators, data_context
         )
 
         self._emit(
             "llm.stream.complete",
             scaffold_id=scaffold.id,
-            output_tokens=response.usage["output_tokens"],
+            output_tokens=len(content.split()),
             elapsed_ms=(time.monotonic() - started) * 1000,
-            guardrail_flag_count=len(response.guardrail_flags),
+            guardrail_flag_count=len(flags),
         )
 
-        yield StreamEvent(event="final", text=response.content, response=response)
+        yield StreamEvent(
+            event="final",
+            text=content,
+            response=self._build_response(
+                content, scaffold, flags, exports,
+                {"input_tokens": 0, "output_tokens": len(content.split())},
+            ),
+        )
