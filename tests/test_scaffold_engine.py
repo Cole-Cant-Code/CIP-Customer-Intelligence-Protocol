@@ -5,6 +5,7 @@ from conftest import make_test_config, make_test_scaffold
 
 from cip_protocol.scaffold.engine import ScaffoldEngine, ScaffoldNotFoundError
 from cip_protocol.scaffold.registry import ScaffoldRegistry
+from cip_protocol.telemetry import InMemoryTelemetrySink
 
 
 class TestScaffoldRegistry:
@@ -38,6 +39,7 @@ class TestScaffoldRegistry:
 class TestScaffoldEngine:
     def _engine_with_scaffolds(self):
         config = make_test_config()
+        telemetry = InMemoryTelemetrySink()
         registry = ScaffoldRegistry()
         registry.register(make_test_scaffold(
             "test_scaffold", tools=["default_tool"]
@@ -46,23 +48,23 @@ class TestScaffoldEngine:
             "special", tools=["special_tool"],
             keywords=["special"],
         ))
-        engine = ScaffoldEngine(registry, config=config)
-        return engine
+        engine = ScaffoldEngine(registry, config=config, telemetry_sink=telemetry)
+        return engine, telemetry
 
     def test_select_by_tool(self):
-        engine = self._engine_with_scaffolds()
+        engine, _ = self._engine_with_scaffolds()
         scaffold = engine.select(tool_name="special_tool")
         assert scaffold.id == "special"
 
     def test_select_by_caller_id(self):
-        engine = self._engine_with_scaffolds()
+        engine, _ = self._engine_with_scaffolds()
         scaffold = engine.select(
             tool_name="unknown_tool", caller_scaffold_id="special"
         )
         assert scaffold.id == "special"
 
     def test_select_falls_back_to_default(self):
-        engine = self._engine_with_scaffolds()
+        engine, _ = self._engine_with_scaffolds()
         scaffold = engine.select(tool_name="unknown_tool")
         assert scaffold.id == "test_scaffold"
 
@@ -74,7 +76,7 @@ class TestScaffoldEngine:
             engine.select(tool_name="nonexistent")
 
     def test_apply_produces_assembled_prompt(self):
-        engine = self._engine_with_scaffolds()
+        engine, _ = self._engine_with_scaffolds()
         scaffold = engine.select(tool_name="default_tool")
         prompt = engine.apply(
             scaffold=scaffold,
@@ -96,6 +98,15 @@ class TestScaffoldEngine:
             data_context={"x": 1},
         )
         assert "Data Context" in prompt.user_message
+
+    def test_telemetry_events_emitted(self):
+        engine, telemetry = self._engine_with_scaffolds()
+        scaffold = engine.select(tool_name="default_tool")
+        engine.apply(scaffold=scaffold, user_query="q", data_context={"k": "v"})
+
+        event_names = [event.name for event in telemetry.events]
+        assert "scaffold.select" in event_names
+        assert "scaffold.apply" in event_names
 
 
 class TestScaffoldMatching:

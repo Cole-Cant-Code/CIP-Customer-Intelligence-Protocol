@@ -57,6 +57,7 @@ def make_test_scaffold(
 def make_test_config(
     name: str = "test_domain",
     default_scaffold_id: str | None = "test_scaffold",
+    regex_guardrail_policies: dict[str, str] | None = None,
 ) -> DomainConfig:
     """Create a minimal DomainConfig for testing."""
     return DomainConfig(
@@ -72,5 +73,6 @@ def make_test_config(
             "making guarantees": ("guaranteed to", "i guarantee"),
             "impersonating professionals": ("as your doctor", "as your lawyer"),
         },
+        regex_guardrail_policies=regex_guardrail_policies or {},
         redaction_message="[Removed: contains prohibited test content]",
     )

@@ -2,6 +2,7 @@
 
 from conftest import make_test_scaffold
 
+from cip_protocol.scaffold.models import ChatMessage
 from cip_protocol.scaffold.renderer import render_scaffold
 
 
@@ -74,6 +75,17 @@ class TestRenderer:
         )
         assert result.metadata["scaffold_id"] == "test_scaffold"
         assert result.metadata["scaffold_version"] == "1.0"
+
+    def test_chat_history_attached(self):
+        scaffold = make_test_scaffold()
+        result = render_scaffold(
+            scaffold=scaffold,
+            user_query="test",
+            data_context={},
+            chat_history=[ChatMessage(role="user", content="Earlier turn")],
+        )
+        assert len(result.chat_history) == 1
+        assert result.chat_history[0].content == "Earlier turn"
 
     def test_guardrails_in_system_message(self):
         scaffold = make_test_scaffold(

@@ -23,7 +23,7 @@ import json
 import logging
 from typing import Any
 
-from cip_protocol.scaffold.models import AssembledPrompt, Scaffold
+from cip_protocol.scaffold.models import AssembledPrompt, ChatMessage, Scaffold
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ def render_scaffold(
     user_query: str,
     data_context: dict[str, Any],
     cross_domain_context: dict[str, Any] | None = None,
+    chat_history: list[ChatMessage] | None = None,
     tone_variant: str | None = None,
     output_format: str | None = None,
     data_context_label: str = "Data Context",
@@ -44,6 +45,7 @@ def render_scaffold(
         user_query: The user's original query.
         data_context: Structured data from the domain's data provider.
         cross_domain_context: Optional context from other CIP domains.
+        chat_history: Optional multi-turn history to preserve conversation state.
         tone_variant: Optional tone override.
         output_format: Optional output format override.
         data_context_label: Heading for the data section in the user
@@ -73,6 +75,7 @@ def render_scaffold(
             "tone": effective_tone or scaffold.framing.tone,
             "output_format": effective_format,
         },
+        chat_history=chat_history or [],
     )
 
 

@@ -14,8 +14,9 @@ User query → MCP Tool → Data Provider → Scaffold Engine → Inner LLM → 
 
 1. **Scaffold Engine** selects a reasoning framework (YAML) based on which tool was called and what the user asked
 2. **Renderer** assembles the scaffold into a structured LLM prompt — role, reasoning steps, domain knowledge, output format, guardrails
-3. **Inner LLM Client** sends the prompt to a provider (Anthropic, OpenAI, or mock) and runs the response through a safety pipeline
-4. **Guardrail Pipeline** checks for prohibited patterns, redacts violations, and appends any missing disclaimers
+3. **Inner LLM Client** sends the prompt to a provider (Anthropic, OpenAI, or mock) with optional chat history
+4. **Guardrail Pipeline** runs pluggable evaluators (pattern, regex, escalation), redacts violations, and appends missing disclaimers
+5. **Telemetry Hooks** emit structured events for scaffold selection, latency, token use, and guardrail interventions
 
 All domain-specific behavior comes from one object: `DomainConfig`.
 
@@ -33,6 +34,9 @@ config = DomainConfig(
     prohibited_indicators={
         "recommending products": ("i recommend", "sign up for"),
         "making predictions": ("the market will", "guaranteed to"),
+    },
+    regex_guardrail_policies={
+        "specific_security_reco": r"\\b(buy|sell)\\b.+\\b(stock|ETF|fund)\\b",
     },
     redaction_message="[Removed: contains prohibited financial guidance]",
 )
@@ -61,6 +65,7 @@ config = DomainConfig(
 from cip_protocol import DomainConfig
 from cip_protocol.scaffold import ScaffoldEngine, ScaffoldRegistry, load_scaffold_directory
 from cip_protocol.llm import InnerLLMClient, create_provider
+from cip_protocol.telemetry import LoggerTelemetrySink
 
 # 1. Define your domain
 config = DomainConfig(
@@ -76,14 +81,40 @@ registry = ScaffoldRegistry()
 load_scaffold_directory("path/to/scaffolds/", registry)
 
 # 3. Create engine and LLM client
-engine = ScaffoldEngine(registry, config=config)
+telemetry = LoggerTelemetrySink()
+engine = ScaffoldEngine(registry, config=config, telemetry_sink=telemetry)
 provider = create_provider("anthropic", api_key="sk-...")
-llm_client = InnerLLMClient(provider, config=config)
+llm_client = InnerLLMClient(provider, config=config, telemetry_sink=telemetry)
 
 # 4. In your MCP tool handler:
 scaffold = engine.select(tool_name="analyze_data", user_input=user_query)
-prompt = engine.apply(scaffold, user_query=user_query, data_context=data)
+prompt = engine.apply(
+    scaffold,
+    user_query=user_query,
+    data_context=data,
+    chat_history=[
+        {"role": "user", "content": "Prior user turn"},
+        {"role": "assistant", "content": "Prior assistant turn"},
+    ],
+)
 response = await llm_client.invoke(prompt, scaffold, data_context=data)
+```
+
+### Streaming responses
+
+```python
+async for event in llm_client.invoke_stream(prompt, scaffold, data_context=data):
+    if event.event == "chunk":
+        print(event.text, end="")
+    elif event.event in {"halted", "final"}:
+        final_response = event.response
+```
+
+### Scaffold JSON Schema
+
+```bash
+make schema
+# writes docs/scaffold.schema.json for IDE validation/autocomplete
 ```
 
 ## Scaffold YAMLs
@@ -137,8 +168,9 @@ guardrails:
 ```
 src/cip_protocol/
 ├── domain.py              # DomainConfig — the protocol-domain boundary
+├── telemetry.py           # Structured telemetry events/sinks
 ├── scaffold/
-│   ├── models.py          # Scaffold, AssembledPrompt dataclasses
+│   ├── models.py          # Pydantic scaffold + prompt models
 │   ├── registry.py        # In-memory scaffold index (by id/tool/tag)
 │   ├── loader.py          # YAML → Scaffold deserialization
 │   ├── matcher.py         # Multi-criteria scaffold selection
@@ -148,8 +180,8 @@ src/cip_protocol/
 └── llm/
     ├── provider.py        # LLMProvider protocol + factory
     ├── providers/         # Anthropic, OpenAI, mock implementations
-    ├── client.py          # InnerLLMClient (invoke pipeline)
-    └── response.py        # Guardrails, sanitization, disclaimers
+    ├── client.py          # InnerLLMClient (invoke + invoke_stream)
+    └── response.py        # Pluggable guardrail evaluators + sanitization
 ```
 
 ## Install
@@ -166,8 +198,9 @@ pip install -e ".[dev]"             # + test/lint tools
 
 ```bash
 pip install -e ".[dev]"
-make test    # 47 tests
+make test    # run full test suite
 make lint    # ruff
+make schema  # regenerate scaffold JSON schema
 ```
 
 ## Reference Implementation

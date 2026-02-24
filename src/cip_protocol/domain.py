@@ -67,6 +67,8 @@ class DomainConfig:
         prohibited_indicators: Map of prohibition category to tuple of
             phrases that indicate the LLM violated that prohibition.
             Used by the guardrail checker.
+        regex_guardrail_policies: Optional map of policy name to regex
+            pattern for deterministic hard-policy checks.
         redaction_message: Replacement text when a prohibited pattern
             is redacted from LLM output.
     """
@@ -77,4 +79,5 @@ class DomainConfig:
     default_scaffold_id: str | None = None
     data_context_label: str = "Data Context"
     prohibited_indicators: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    regex_guardrail_policies: dict[str, str] = field(default_factory=dict)
     redaction_message: str = "[Removed: contains prohibited content]"

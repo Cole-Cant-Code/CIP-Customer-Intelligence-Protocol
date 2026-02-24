@@ -6,8 +6,11 @@ satisfy, plus a factory function for instantiation by name.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
+
+HistoryMessage = dict[str, str]
 
 
 @dataclass
@@ -37,9 +40,21 @@ class LLMProvider(Protocol):
         self,
         system_message: str,
         user_message: str,
+        chat_history: list[HistoryMessage] | None = None,
         max_tokens: int = 2048,
         temperature: float = 0.3,
     ) -> ProviderResponse: ...
+
+    async def generate_stream(
+        self,
+        system_message: str,
+        user_message: str,
+        chat_history: list[HistoryMessage] | None = None,
+        max_tokens: int = 2048,
+        temperature: float = 0.3,
+    ) -> AsyncIterator[str]:
+        """Yield response content chunks for streaming clients."""
+        raise NotImplementedError
 
 
 def create_provider(

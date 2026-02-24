@@ -6,6 +6,7 @@ Wraps the ``openai`` SDK's async client behind the LLMProvider protocol.
 from __future__ import annotations
 
 import time
+from collections.abc import AsyncIterator
 
 from cip_protocol.llm.provider import ProviderResponse
 
@@ -19,10 +20,27 @@ class OpenAIProvider:
         self.client = openai.AsyncOpenAI(api_key=api_key)
         self.model = model
 
+    @staticmethod
+    def _build_messages(
+        system_message: str,
+        user_message: str,
+        chat_history: list[dict[str, str]] | None = None,
+    ) -> list[dict[str, str]]:
+        """Build OpenAI chat messages preserving prior turns."""
+        messages: list[dict[str, str]] = [{"role": "system", "content": system_message}]
+        for item in chat_history or []:
+            role = item.get("role", "").strip()
+            content = item.get("content", "")
+            if role in {"system", "user", "assistant", "tool"} and content:
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": user_message})
+        return messages
+
     async def generate(
         self,
         system_message: str,
         user_message: str,
+        chat_history: list[dict[str, str]] | None = None,
         max_tokens: int = 2048,
         temperature: float = 0.3,
     ) -> ProviderResponse:
@@ -31,10 +49,7 @@ class OpenAIProvider:
             model=self.model,
             max_tokens=max_tokens,
             temperature=temperature,
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": user_message},
-            ],
+            messages=self._build_messages(system_message, user_message, chat_history),
         )
         elapsed_ms = (time.monotonic() - start) * 1000
 
@@ -48,3 +63,26 @@ class OpenAIProvider:
             model=self.model,
             latency_ms=elapsed_ms,
         )
+
+    async def generate_stream(
+        self,
+        system_message: str,
+        user_message: str,
+        chat_history: list[dict[str, str]] | None = None,
+        max_tokens: int = 2048,
+        temperature: float = 0.3,
+    ) -> AsyncIterator[str]:
+        """Yield streaming text chunks from OpenAI chat completions."""
+        stream = await self.client.chat.completions.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            messages=self._build_messages(system_message, user_message, chat_history),
+            stream=True,
+        )
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                yield delta.content

@@ -7,11 +7,13 @@ from conftest import make_test_config, make_test_scaffold
 from cip_protocol.llm.client import InnerLLMClient
 from cip_protocol.llm.providers.mock import MockProvider
 from cip_protocol.llm.response import (
+    GuardrailEvaluation,
     check_guardrails,
     enforce_disclaimers,
     sanitize_content,
 )
-from cip_protocol.scaffold.models import AssembledPrompt
+from cip_protocol.scaffold.models import AssembledPrompt, ChatMessage
+from cip_protocol.telemetry import InMemoryTelemetrySink
 
 
 class TestGuardrails:
@@ -225,3 +227,133 @@ class TestInnerLLMClient:
         )
 
         assert "Data source: test_provider" in response.content
+
+    @pytest.mark.asyncio
+    async def test_chat_history_forwarded_from_prompt(self):
+        provider = MockProvider(response_content="History-aware response.")
+        client = InnerLLMClient(provider, config=make_test_config())
+
+        scaffold = make_test_scaffold()
+        prompt = AssembledPrompt(
+            system_message="Analyze.",
+            user_message="Current query.",
+            chat_history=[
+                ChatMessage(role="user", content="Previous user turn"),
+                ChatMessage(role="assistant", content="Previous assistant turn"),
+            ],
+        )
+
+        await client.invoke(assembled_prompt=prompt, scaffold=scaffold)
+
+        assert len(provider.last_chat_history) == 2
+        assert provider.last_chat_history[0]["role"] == "user"
+        assert provider.last_chat_history[1]["role"] == "assistant"
+
+    @pytest.mark.asyncio
+    async def test_chat_history_override_parameter(self):
+        provider = MockProvider(response_content="Override history response.")
+        client = InnerLLMClient(provider, config=make_test_config())
+
+        scaffold = make_test_scaffold()
+        prompt = AssembledPrompt(
+            system_message="Analyze.",
+            user_message="Current query.",
+            chat_history=[ChatMessage(role="user", content="Prompt history turn")],
+        )
+
+        await client.invoke(
+            assembled_prompt=prompt,
+            scaffold=scaffold,
+            chat_history=[{"role": "assistant", "content": "Explicit override"}],
+        )
+
+        assert len(provider.last_chat_history) == 1
+        assert provider.last_chat_history[0]["content"] == "Explicit override"
+
+    @pytest.mark.asyncio
+    async def test_custom_guardrail_evaluator_pipeline(self):
+        class AlwaysBlockEvaluator:
+            name = "always_block"
+
+            def evaluate(self, content: str, scaffold):  # noqa: ANN001
+                _ = content, scaffold
+                return GuardrailEvaluation(
+                    evaluator_name=self.name,
+                    flags=["regex_policy_violation: blocked"],
+                    hard_violations=["blocked"],
+                )
+
+        provider = MockProvider(response_content="All good.")
+        client = InnerLLMClient(
+            provider,
+            config=make_test_config(),
+            guardrail_evaluators=[AlwaysBlockEvaluator()],
+        )
+
+        scaffold = make_test_scaffold()
+        prompt = AssembledPrompt(system_message="Analyze.", user_message="Query.")
+        response = await client.invoke(assembled_prompt=prompt, scaffold=scaffold)
+
+        assert "prohibited test content" in response.content
+        assert any("regex_policy_violation" in flag for flag in response.guardrail_flags)
+
+    @pytest.mark.asyncio
+    async def test_regex_guardrail_policy_from_config(self):
+        config = make_test_config(
+            regex_guardrail_policies={"dosage_directive": r"\btake\b.+\d+mg\b"}
+        )
+        provider = MockProvider(response_content="You should take 20mg every day.")
+        client = InnerLLMClient(provider, config=config)
+
+        scaffold = make_test_scaffold()
+        prompt = AssembledPrompt(system_message="Analyze.", user_message="Query.")
+        response = await client.invoke(assembled_prompt=prompt, scaffold=scaffold)
+
+        assert "prohibited test content" in response.content
+        assert any("regex_policy_violation" in flag for flag in response.guardrail_flags)
+
+    @pytest.mark.asyncio
+    async def test_invoke_stream_emits_final_event(self):
+        provider = MockProvider(response_content="Streaming works.")
+        client = InnerLLMClient(provider, config=make_test_config())
+
+        scaffold = make_test_scaffold()
+        prompt = AssembledPrompt(system_message="Analyze.", user_message="Query.")
+
+        events = []
+        async for event in client.invoke_stream(assembled_prompt=prompt, scaffold=scaffold):
+            events.append(event)
+
+        assert any(event.event == "chunk" for event in events)
+        assert events[-1].event == "final"
+        assert events[-1].response is not None
+
+    @pytest.mark.asyncio
+    async def test_invoke_stream_halts_on_guardrail_violation(self):
+        provider = MockProvider(response_content="This is guaranteed to work.")
+        client = InnerLLMClient(provider, config=make_test_config())
+
+        scaffold = make_test_scaffold()
+        prompt = AssembledPrompt(system_message="Analyze.", user_message="Query.")
+
+        events = []
+        async for event in client.invoke_stream(assembled_prompt=prompt, scaffold=scaffold):
+            events.append(event)
+
+        assert events[-1].event == "halted"
+        assert events[-1].response is not None
+        assert "guaranteed to" not in events[-1].response.content
+
+    @pytest.mark.asyncio
+    async def test_telemetry_events_emitted(self):
+        sink = InMemoryTelemetrySink()
+        provider = MockProvider(response_content="Telemetry test.")
+        client = InnerLLMClient(provider, config=make_test_config(), telemetry_sink=sink)
+
+        scaffold = make_test_scaffold()
+        prompt = AssembledPrompt(system_message="Analyze.", user_message="Query.")
+        await client.invoke(assembled_prompt=prompt, scaffold=scaffold)
+
+        names = [event.name for event in sink.events]
+        assert "llm.invoke.start" in names
+        assert "llm.invoke.complete" in names

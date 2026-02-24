@@ -1,0 +1,240 @@
+{
+  "$defs": {
+    "ContextField": {
+      "additionalProperties": false,
+      "description": "A single cross-domain context field definition.",
+      "properties": {
+        "field_name": {
+          "title": "Field Name",
+          "type": "string"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field_name",
+        "type"
+      ],
+      "title": "ContextField",
+      "type": "object"
+    },
+    "ScaffoldApplicability": {
+      "additionalProperties": false,
+      "description": "Defines when a scaffold should be selected.",
+      "properties": {
+        "tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tools",
+          "type": "array"
+        },
+        "keywords": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Keywords",
+          "type": "array"
+        },
+        "intent_signals": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Intent Signals",
+          "type": "array"
+        }
+      },
+      "title": "ScaffoldApplicability",
+      "type": "object"
+    },
+    "ScaffoldFraming": {
+      "additionalProperties": false,
+      "description": "The cognitive framing the inner LLM adopts.",
+      "properties": {
+        "role": {
+          "default": "",
+          "title": "Role",
+          "type": "string"
+        },
+        "perspective": {
+          "default": "",
+          "title": "Perspective",
+          "type": "string"
+        },
+        "tone": {
+          "default": "",
+          "title": "Tone",
+          "type": "string"
+        },
+        "tone_variants": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Tone Variants",
+          "type": "object"
+        }
+      },
+      "title": "ScaffoldFraming",
+      "type": "object"
+    },
+    "ScaffoldGuardrails": {
+      "additionalProperties": false,
+      "description": "Safety boundaries for the inner LLM.",
+      "properties": {
+        "disclaimers": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Disclaimers",
+          "type": "array"
+        },
+        "escalation_triggers": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Escalation Triggers",
+          "type": "array"
+        },
+        "prohibited_actions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Prohibited Actions",
+          "type": "array"
+        }
+      },
+      "title": "ScaffoldGuardrails",
+      "type": "object"
+    },
+    "ScaffoldOutputCalibration": {
+      "additionalProperties": false,
+      "description": "Controls the shape and content of LLM output.",
+      "properties": {
+        "format": {
+          "default": "structured_narrative",
+          "title": "Format",
+          "type": "string"
+        },
+        "format_options": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Format Options",
+          "type": "array"
+        },
+        "max_length_guidance": {
+          "default": "",
+          "title": "Max Length Guidance",
+          "type": "string"
+        },
+        "must_include": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Must Include",
+          "type": "array"
+        },
+        "never_include": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Never Include",
+          "type": "array"
+        }
+      },
+      "title": "ScaffoldOutputCalibration",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A complete cognitive scaffold reasoning framework.",
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    },
+    "domain": {
+      "title": "Domain",
+      "type": "string"
+    },
+    "display_name": {
+      "title": "Display Name",
+      "type": "string"
+    },
+    "description": {
+      "title": "Description",
+      "type": "string"
+    },
+    "applicability": {
+      "$ref": "#/$defs/ScaffoldApplicability"
+    },
+    "framing": {
+      "$ref": "#/$defs/ScaffoldFraming"
+    },
+    "reasoning_framework": {
+      "additionalProperties": true,
+      "title": "Reasoning Framework",
+      "type": "object"
+    },
+    "domain_knowledge_activation": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Domain Knowledge Activation",
+      "type": "array"
+    },
+    "output_calibration": {
+      "$ref": "#/$defs/ScaffoldOutputCalibration"
+    },
+    "guardrails": {
+      "$ref": "#/$defs/ScaffoldGuardrails"
+    },
+    "context_accepts": {
+      "items": {
+        "$ref": "#/$defs/ContextField"
+      },
+      "title": "Context Accepts",
+      "type": "array"
+    },
+    "context_exports": {
+      "items": {
+        "$ref": "#/$defs/ContextField"
+      },
+      "title": "Context Exports",
+      "type": "array"
+    },
+    "tags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tags",
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "version",
+    "domain",
+    "display_name",
+    "description",
+    "applicability",
+    "framing",
+    "reasoning_framework",
+    "domain_knowledge_activation",
+    "output_calibration",
+    "guardrails"
+  ],
+  "title": "Scaffold",
+  "type": "object"
+}

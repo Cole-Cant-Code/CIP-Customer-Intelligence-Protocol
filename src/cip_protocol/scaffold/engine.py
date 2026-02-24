@@ -17,9 +17,10 @@ from typing import Any
 
 from cip_protocol.domain import DomainConfig
 from cip_protocol.scaffold.matcher import match_scaffold
-from cip_protocol.scaffold.models import AssembledPrompt, Scaffold
+from cip_protocol.scaffold.models import AssembledPrompt, ChatMessage, Scaffold
 from cip_protocol.scaffold.registry import ScaffoldRegistry
 from cip_protocol.scaffold.renderer import render_scaffold
+from cip_protocol.telemetry import NoOpTelemetrySink, TelemetryEvent, TelemetrySink
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +48,11 @@ class ScaffoldEngine:
         self,
         registry: ScaffoldRegistry,
         config: DomainConfig | None = None,
+        telemetry_sink: TelemetrySink | None = None,
     ) -> None:
         self.registry = registry
         self.config = config
+        self.telemetry_sink = telemetry_sink or NoOpTelemetrySink()
 
     def select(
         self,
@@ -70,6 +73,16 @@ class ScaffoldEngine:
         )
 
         if scaffold:
+            self.telemetry_sink.emit(
+                TelemetryEvent(
+                    name="scaffold.select",
+                    attributes={
+                        "tool_name": tool_name,
+                        "selected_scaffold_id": scaffold.id,
+                        "selection_mode": "matched",
+                    },
+                )
+            )
             return scaffold
 
         # Fall back to domain default
@@ -78,6 +91,16 @@ class ScaffoldEngine:
             default = self.registry.get(default_id)
             if default:
                 logger.info("Using default scaffold: %s", default_id)
+                self.telemetry_sink.emit(
+                    TelemetryEvent(
+                        name="scaffold.select",
+                        attributes={
+                            "tool_name": tool_name,
+                            "selected_scaffold_id": default.id,
+                            "selection_mode": "default",
+                        },
+                    )
+                )
                 return default
 
         raise ScaffoldNotFoundError(
@@ -92,16 +115,28 @@ class ScaffoldEngine:
         user_query: str,
         data_context: dict[str, Any],
         cross_domain_context: dict[str, Any] | None = None,
+        chat_history: list[ChatMessage] | None = None,
         tone_variant: str | None = None,
         output_format: str | None = None,
     ) -> AssembledPrompt:
         """Combine scaffold + user query + data into a complete LLM prompt."""
         label = self.config.data_context_label if self.config else "Data Context"
+        self.telemetry_sink.emit(
+            TelemetryEvent(
+                name="scaffold.apply",
+                attributes={
+                    "scaffold_id": scaffold.id,
+                    "user_query_length": len(user_query),
+                    "data_context_keys": sorted(data_context.keys()),
+                },
+            )
+        )
         return render_scaffold(
             scaffold=scaffold,
             user_query=user_query,
             data_context=data_context,
             cross_domain_context=cross_domain_context,
+            chat_history=chat_history,
             tone_variant=tone_variant,
             output_format=output_format,
             data_context_label=label,

@@ -1,4 +1,4 @@
-.PHONY: test lint format
+.PHONY: test lint format schema
 
 test:
 	python -m pytest tests/ -v
@@ -8,3 +8,6 @@ lint:
 
 format:
 	ruff format src/ tests/
+
+schema:
+	PYTHONPATH=src python scripts/dev/generate_scaffold_schema.py

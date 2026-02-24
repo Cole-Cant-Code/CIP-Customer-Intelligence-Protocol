@@ -23,10 +23,23 @@ class TestMockProvider:
         await provider.generate(
             system_message="system prompt",
             user_message="user query",
+            chat_history=[{"role": "assistant", "content": "previous"}],
         )
         assert provider.last_system_message == "system prompt"
         assert provider.last_user_message == "user query"
+        assert provider.last_chat_history == [{"role": "assistant", "content": "previous"}]
         assert provider.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_streaming_chunks(self):
+        provider = MockProvider(response_content="one two three")
+        chunks = []
+        async for chunk in provider.generate_stream(
+            system_message="sys",
+            user_message="usr",
+        ):
+            chunks.append(chunk)
+        assert "".join(chunks).strip() == "one two three"
 
     def test_satisfies_protocol(self):
         provider = MockProvider()

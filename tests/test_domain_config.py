@@ -14,6 +14,7 @@ class TestDomainConfig:
         assert config.default_scaffold_id is None
         assert config.data_context_label == "Data Context"
         assert config.prohibited_indicators == {}
+        assert config.regex_guardrail_policies == {}
         assert config.redaction_message == "[Removed: contains prohibited content]"
 
     def test_full_config(self):
@@ -26,11 +27,15 @@ class TestDomainConfig:
             prohibited_indicators={
                 "diagnosing": ("you have", "this is definitely"),
             },
+            regex_guardrail_policies={
+                "dosage_directive": r"\\b(take|stop taking)\\b.+\\bmg\\b",
+            },
             redaction_message="[Removed: contains prohibited medical guidance]",
         )
         assert config.default_scaffold_id == "symptom_overview"
         assert config.data_context_label == "Health Records"
         assert "diagnosing" in config.prohibited_indicators
+        assert "dosage_directive" in config.regex_guardrail_policies
         assert "medical" in config.redaction_message
 
     def test_config_is_domain_agnostic(self):
