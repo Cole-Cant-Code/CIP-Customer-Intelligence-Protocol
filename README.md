@@ -1,4 +1,4 @@
-# CIP Protocol
+# CIP Customer Intelligence Protocol
 
 Domain-agnostic framework for building consumer-facing MCP servers.
 
