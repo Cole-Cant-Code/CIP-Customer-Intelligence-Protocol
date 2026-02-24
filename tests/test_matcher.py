@@ -9,10 +9,13 @@ from cip_protocol.scaffold.matcher import (
     INTENT_WEIGHT,
     KEYWORD_WEIGHT,
     MIN_SIGNAL_COVERAGE,
+    _cache,
     _contains_phrase,
     _score_scaffolds,
     _tokenize,
+    clear_matcher_cache,
     match_scaffold,
+    prepare_matcher_cache,
 )
 from cip_protocol.scaffold.registry import ScaffoldRegistry
 
@@ -145,6 +148,53 @@ class TestScoreScaffolds:
         )
         assert result is not None
         assert result.id == "multi"
+
+
+class TestMatcherCache:
+    def test_prepare_populates_cache(self):
+        registry = ScaffoldRegistry()
+        s = make_test_scaffold("cached", tools=[], keywords=["test"], intent_signals=["do test"])
+        registry.register(s)
+        prepare_matcher_cache(registry)
+        assert "cached" in _cache
+        assert "do test" in _cache["cached"].signal_tokens
+        assert "test" in _cache["cached"].keyword_patterns
+
+    def test_clear_empties_cache(self):
+        registry = ScaffoldRegistry()
+        s = make_test_scaffold("to_clear", tools=[], keywords=["x"], intent_signals=[])
+        registry.register(s)
+        prepare_matcher_cache(registry)
+        assert "to_clear" in _cache
+        clear_matcher_cache()
+        assert len(_cache) == 0
+
+    def test_cached_results_match_uncached(self):
+        """Scoring with pre-warmed cache produces identical results to cold cache."""
+        kw = make_test_scaffold("kw", tools=[], keywords=["budget"], intent_signals=[])
+        intent = make_test_scaffold(
+            "intent", tools=[], keywords=[], intent_signals=["create a budget"],
+        )
+        scaffolds = [kw, intent]
+        user_input = "I want to create a budget"
+
+        # Cold cache
+        clear_matcher_cache()
+        cold_result = _score_scaffolds(scaffolds, user_input)
+
+        # Warm cache (already populated from first call), re-run
+        warm_result = _score_scaffolds(scaffolds, user_input)
+
+        assert cold_result is not None
+        assert warm_result is not None
+        assert cold_result.id == warm_result.id
+
+    def test_lazy_cache_on_first_score(self):
+        """Cache is populated lazily when _score_scaffolds encounters a scaffold."""
+        s = make_test_scaffold("lazy", tools=[], keywords=["data"], intent_signals=[])
+        assert "lazy" not in _cache
+        _score_scaffolds([s], "show me data")
+        assert "lazy" in _cache
 
 
 class TestConstants:

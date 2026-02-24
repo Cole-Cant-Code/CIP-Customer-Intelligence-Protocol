@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cip_protocol.domain import DomainConfig
 from cip_protocol.scaffold.matcher import match_scaffold
@@ -11,6 +11,9 @@ from cip_protocol.scaffold.models import AssembledPrompt, ChatMessage, Scaffold
 from cip_protocol.scaffold.registry import ScaffoldRegistry
 from cip_protocol.scaffold.renderer import render_scaffold
 from cip_protocol.telemetry import NoOpTelemetrySink, TelemetryEvent, TelemetrySink
+
+if TYPE_CHECKING:
+    from cip_protocol.control import RunPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +38,15 @@ class ScaffoldEngine:
         tool_name: str,
         user_input: str = "",
         caller_scaffold_id: str | None = None,
+        policy: RunPolicy | None = None,
     ) -> Scaffold:
+        bias = policy.scaffold_selection_bias if policy else None
         scaffold = match_scaffold(
             registry=self.registry,
             tool_name=tool_name,
             user_input=user_input,
             caller_scaffold_id=caller_scaffold_id,
+            selection_bias=bias,
         )
 
         if scaffold:
@@ -84,7 +90,16 @@ class ScaffoldEngine:
         chat_history: list[ChatMessage] | None = None,
         tone_variant: str | None = None,
         output_format: str | None = None,
+        compact: bool = False,
+        policy: RunPolicy | None = None,
     ) -> AssembledPrompt:
+        # Resolve effective overrides from policy
+        if policy:
+            tone_variant = policy.tone_variant or tone_variant
+            output_format = policy.output_format or output_format
+            if policy.compact is not None:
+                compact = policy.compact
+
         label = self.config.data_context_label if self.config else "Data Context"
         self.telemetry.emit(TelemetryEvent(
             name="scaffold.apply",
@@ -103,4 +118,6 @@ class ScaffoldEngine:
             tone_variant=tone_variant,
             output_format=output_format,
             data_context_label=label,
+            compact=compact,
+            policy=policy,
         )

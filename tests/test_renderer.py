@@ -111,3 +111,56 @@ class TestRenderer:
         )
         assert "1. Analyze data" in result.system_message
         assert "2. Draw conclusions" in result.system_message
+
+
+class TestCompactMode:
+    def test_compact_strips_headers(self):
+        scaffold = make_test_scaffold()
+        result = render_scaffold(
+            scaffold=scaffold, user_query="test", data_context={}, compact=True,
+        )
+        assert "##" not in result.system_message
+        assert "Test analyst" in result.system_message
+
+    def test_compact_collapses_bullets(self):
+        scaffold = make_test_scaffold(
+            disclaimers=["Disclaimer A", "Disclaimer B"],
+        )
+        result = render_scaffold(
+            scaffold=scaffold, user_query="test", data_context={}, compact=True,
+        )
+        assert "Disclaimer A; Disclaimer B" in result.system_message
+
+    def test_compact_user_message_no_headers(self):
+        scaffold = make_test_scaffold()
+        result = render_scaffold(
+            scaffold=scaffold, user_query="test query", data_context={"k": "v"}, compact=True,
+        )
+        assert "##" not in result.user_message
+        assert "test query" in result.user_message
+
+    def test_compact_json_not_indented(self):
+        scaffold = make_test_scaffold()
+        result = render_scaffold(
+            scaffold=scaffold, user_query="test", data_context={"a": 1, "b": 2}, compact=True,
+        )
+        assert "```json" not in result.user_message
+        # Compact JSON is on a single line
+        assert '{"a": 1, "b": 2}' in result.user_message
+
+    def test_compact_cross_domain_no_headers(self):
+        scaffold = make_test_scaffold()
+        result = render_scaffold(
+            scaffold=scaffold, user_query="test", data_context={},
+            cross_domain_context={"score": 0.5}, compact=True,
+        )
+        assert "Cross-domain:" in result.user_message
+        assert "##" not in result.user_message
+
+    def test_default_is_not_compact(self):
+        scaffold = make_test_scaffold()
+        result = render_scaffold(
+            scaffold=scaffold, user_query="test", data_context={},
+        )
+        assert "## Your Role" in result.system_message
+        assert "## User Request" in result.user_message

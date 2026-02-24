@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
 import re
 from dataclasses import dataclass, field
@@ -11,6 +13,30 @@ from cip_protocol.scaffold.models import Scaffold
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Regex engine: prefer google-re2 for linear-time guarantees if installed,
+# with automatic fallback to stdlib re for patterns re2 can't handle.
+# ---------------------------------------------------------------------------
+
+try:
+    import re2 as _re_engine  # type: ignore[import-untyped]
+except ImportError:
+    _re_engine = re  # type: ignore[assignment]
+
+
+def _compile(pattern: str, flags: int = 0) -> re.Pattern[str]:
+    """Compile with re2 if available, else stdlib re."""
+    if _re_engine is not re:
+        try:
+            return _re_engine.compile(pattern, flags)
+        except Exception:
+            pass
+    return re.compile(pattern, flags)
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
 
 @dataclass
 class GuardrailEvaluation:
@@ -37,13 +63,41 @@ class GuardrailEvaluator(Protocol):
     def evaluate(self, content: str, scaffold: Scaffold) -> GuardrailEvaluation: ...
 
 
+# ---------------------------------------------------------------------------
+# Cached pattern compilation helpers
+# ---------------------------------------------------------------------------
+
+@functools.lru_cache(maxsize=256)
+def _compile_indicator_pattern(normalized: str) -> re.Pattern[str]:
+    escaped = re.escape(normalized).replace(r"\ ", r"\s+")
+    return _compile(rf"(?<!\w){escaped}(?!\w)")
+
+
+@functools.lru_cache(maxsize=256)
+def _compile_redaction_pattern(phrase: str) -> re.Pattern[str]:
+    truncated = phrase[:500] if len(phrase) > 500 else phrase
+    escaped = re.escape(truncated).replace(r"\ ", r"\s+")
+    return _compile(
+        r"[^.!?\n]{0,500}(?<!\w)" + escaped + r"(?!\w)[^.!?\n]{0,500}[.!?]?",
+        re.IGNORECASE,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Indicator matching
+# ---------------------------------------------------------------------------
+
 def _contains_indicator(content_lower: str, pattern: str) -> bool:
     normalized = " ".join(pattern.lower().split())
     if not normalized:
         return False
-    escaped = re.escape(normalized).replace(r"\ ", r"\s+")
-    return bool(re.search(rf"(?<!\w){escaped}(?!\w)", content_lower))
+    compiled = _compile_indicator_pattern(normalized)
+    return bool(compiled.search(content_lower))
 
+
+# ---------------------------------------------------------------------------
+# Evaluators
+# ---------------------------------------------------------------------------
 
 class EscalationTriggerEvaluator:
     name = "escalation_trigger"
@@ -64,12 +118,24 @@ class EscalationTriggerEvaluator:
 
         return GuardrailEvaluation(evaluator_name=self.name, flags=flags)
 
+    async def async_evaluate(self, content: str, scaffold: Scaffold) -> GuardrailEvaluation:
+        return self.evaluate(content, scaffold)
+
 
 class ProhibitedPatternEvaluator:
     name = "prohibited_pattern"
 
     def __init__(self, indicators: dict[str, tuple[str, ...]]) -> None:
         self.indicators = indicators
+        self._compiled: dict[str, list[tuple[str, re.Pattern[str]]]] = {}
+        for action, patterns in indicators.items():
+            compiled_list: list[tuple[str, re.Pattern[str]]] = []
+            for pattern in patterns:
+                normalized = " ".join(pattern.lower().split())
+                if not normalized:
+                    continue
+                compiled_list.append((pattern, _compile_indicator_pattern(normalized)))
+            self._compiled[action] = compiled_list
 
     def evaluate(self, content: str, scaffold: Scaffold) -> GuardrailEvaluation:
         content_lower = " ".join(content.lower().split())
@@ -77,12 +143,12 @@ class ProhibitedPatternEvaluator:
         violations: list[str] = []
         phrases: list[str] = []
 
-        for action, patterns in self.indicators.items():
-            for pattern in patterns:
-                if _contains_indicator(content_lower, pattern):
-                    flags.append(f"prohibited_pattern_detected: {action} ('{pattern}')")
+        for action, compiled_patterns in self._compiled.items():
+            for raw_pattern, regex in compiled_patterns:
+                if regex.search(content_lower):
+                    flags.append(f"prohibited_pattern_detected: {action} ('{raw_pattern}')")
                     violations.append(action)
-                    phrases.append(pattern)
+                    phrases.append(raw_pattern)
 
         return GuardrailEvaluation(
             evaluator_name=self.name,
@@ -91,13 +157,16 @@ class ProhibitedPatternEvaluator:
             matched_phrases=phrases,
         )
 
+    async def async_evaluate(self, content: str, scaffold: Scaffold) -> GuardrailEvaluation:
+        return self.evaluate(content, scaffold)
+
 
 class RegexPolicyEvaluator:
     name = "regex_policy"
 
     def __init__(self, policy_patterns: dict[str, str]) -> None:
         self.compiled = {
-            name: re.compile(pattern, re.IGNORECASE)
+            name: _compile(pattern, re.IGNORECASE)
             for name, pattern in policy_patterns.items()
         }
 
@@ -116,6 +185,13 @@ class RegexPolicyEvaluator:
             hard_violations=violations,
         )
 
+    async def async_evaluate(self, content: str, scaffold: Scaffold) -> GuardrailEvaluation:
+        return self.evaluate(content, scaffold)
+
+
+# ---------------------------------------------------------------------------
+# Guardrail orchestration (sync + async)
+# ---------------------------------------------------------------------------
 
 def default_guardrail_evaluators(
     prohibited_indicators: dict[str, tuple[str, ...]] | None = None,
@@ -129,21 +205,15 @@ def default_guardrail_evaluators(
     return evaluators
 
 
-def check_guardrails(
-    content: str,
-    scaffold: Scaffold,
-    prohibited_indicators: dict[str, tuple[str, ...]] | None = None,
-    evaluators: list[GuardrailEvaluator] | None = None,
+def _aggregate_results(
+    results: list[GuardrailEvaluation],
 ) -> GuardrailCheck:
-    active = evaluators or default_guardrail_evaluators(prohibited_indicators)
-
     all_flags: list[str] = []
     hard_violations: list[str] = []
     matched_phrases: list[str] = []
     findings: list[dict[str, Any]] = []
 
-    for evaluator in active:
-        result = evaluator.evaluate(content, scaffold)
+    for result in results:
         all_flags.extend(result.flags)
         hard_violations.extend(result.hard_violations)
         matched_phrases.extend(result.matched_phrases)
@@ -163,6 +233,44 @@ def check_guardrails(
         evaluator_findings=findings,
     )
 
+
+def check_guardrails(
+    content: str,
+    scaffold: Scaffold,
+    prohibited_indicators: dict[str, tuple[str, ...]] | None = None,
+    evaluators: list[GuardrailEvaluator] | None = None,
+) -> GuardrailCheck:
+    active = evaluators or default_guardrail_evaluators(prohibited_indicators)
+    results = [ev.evaluate(content, scaffold) for ev in active]
+    return _aggregate_results(results)
+
+
+async def _run_evaluator(
+    evaluator: GuardrailEvaluator, content: str, scaffold: Scaffold,
+) -> GuardrailEvaluation:
+    async_fn = getattr(evaluator, "async_evaluate", None)
+    if async_fn is not None and callable(async_fn):
+        return await async_fn(content, scaffold)
+    return evaluator.evaluate(content, scaffold)
+
+
+async def check_guardrails_async(
+    content: str,
+    scaffold: Scaffold,
+    prohibited_indicators: dict[str, tuple[str, ...]] | None = None,
+    evaluators: list[GuardrailEvaluator] | None = None,
+) -> GuardrailCheck:
+    """Async version of check_guardrails. Runs evaluators concurrently."""
+    active = evaluators or default_guardrail_evaluators(prohibited_indicators)
+    results = await asyncio.gather(
+        *(_run_evaluator(ev, content, scaffold) for ev in active)
+    )
+    return _aggregate_results(list(results))
+
+
+# ---------------------------------------------------------------------------
+# Sanitization
+# ---------------------------------------------------------------------------
 
 def sanitize_content(
     content: str,
@@ -186,17 +294,15 @@ def sanitize_content(
 
     sanitized = content
     for phrase in phrases:
-        if len(phrase) > 500:
-            phrase = phrase[:500]
-        escaped = re.escape(phrase).replace(r"\ ", r"\s+")
-        pattern = re.compile(
-            r"[^.!?\n]{0,500}(?<!\w)" + escaped + r"(?!\w)[^.!?\n]{0,500}[.!?]?",
-            re.IGNORECASE,
-        )
+        pattern = _compile_redaction_pattern(phrase)
         sanitized = pattern.sub(redaction_message, sanitized)
 
     return sanitized
 
+
+# ---------------------------------------------------------------------------
+# Disclaimers and context export
+# ---------------------------------------------------------------------------
 
 def enforce_disclaimers(content: str, scaffold: Scaffold) -> tuple[str, list[str]]:
     disclaimers = [d.strip() for d in scaffold.guardrails.disclaimers if d.strip()]

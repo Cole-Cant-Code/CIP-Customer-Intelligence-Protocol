@@ -4,13 +4,15 @@ import logging
 import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cip_protocol.domain import DomainConfig
 from cip_protocol.llm.provider import HistoryMessage, LLMProvider, ProviderResponse
 from cip_protocol.llm.response import (
+    GuardrailCheck,
     GuardrailEvaluator,
     check_guardrails,
+    check_guardrails_async,
     default_guardrail_evaluators,
     enforce_disclaimers,
     extract_context_exports,
@@ -18,6 +20,9 @@ from cip_protocol.llm.response import (
 )
 from cip_protocol.scaffold.models import AssembledPrompt, ChatMessage, Scaffold
 from cip_protocol.telemetry import NoOpTelemetrySink, TelemetryEvent, TelemetrySink
+
+if TYPE_CHECKING:
+    from cip_protocol.control import RunPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -98,19 +103,14 @@ class InnerLLMClient:
     def _emit(self, name: str, **attrs: Any) -> None:
         self.telemetry.emit(TelemetryEvent(name=name, attributes=attrs))
 
-    def _postprocess(
+    def _finalize_postprocess(
         self,
         raw_content: str,
         scaffold: Scaffold,
-        evaluators: list[GuardrailEvaluator],
+        guardrail_check: GuardrailCheck,
         data_context: dict[str, Any] | None,
+        skip_disclaimers: bool = False,
     ) -> tuple[str, list[str], dict[str, Any], bool]:
-        """Run guardrails, sanitize, disclaimers, provenance, context exports.
-
-        Returns (content, flags, context_exports, guardrails_passed).
-        """
-        guardrail_check = check_guardrails(raw_content, scaffold, evaluators=evaluators)
-
         content = sanitize_content(
             raw_content, guardrail_check, redaction_message=self._redaction_message
         )
@@ -123,7 +123,10 @@ class InnerLLMClient:
                 matched_phrases=guardrail_check.matched_phrases,
             )
 
-        content, disclaimer_flags = enforce_disclaimers(content, scaffold)
+        if skip_disclaimers:
+            disclaimer_flags: list[str] = []
+        else:
+            content, disclaimer_flags = enforce_disclaimers(content, scaffold)
         content = self._append_provenance(content, data_context)
 
         context_exports = extract_context_exports(
@@ -134,6 +137,38 @@ class InnerLLMClient:
 
         flags = guardrail_check.flags + disclaimer_flags
         return content, flags, context_exports, guardrail_check.passed
+
+    def _postprocess(
+        self,
+        raw_content: str,
+        scaffold: Scaffold,
+        evaluators: list[GuardrailEvaluator],
+        data_context: dict[str, Any] | None,
+        skip_disclaimers: bool = False,
+    ) -> tuple[str, list[str], dict[str, Any], bool]:
+        """Sync postprocess: guardrails, sanitize, disclaimers, provenance."""
+        guardrail_check = check_guardrails(raw_content, scaffold, evaluators=evaluators)
+        return self._finalize_postprocess(
+            raw_content, scaffold, guardrail_check, data_context,
+            skip_disclaimers=skip_disclaimers,
+        )
+
+    async def _postprocess_async(
+        self,
+        raw_content: str,
+        scaffold: Scaffold,
+        evaluators: list[GuardrailEvaluator],
+        data_context: dict[str, Any] | None,
+        skip_disclaimers: bool = False,
+    ) -> tuple[str, list[str], dict[str, Any], bool]:
+        """Async postprocess: runs guardrail evaluators concurrently."""
+        guardrail_check = await check_guardrails_async(
+            raw_content, scaffold, evaluators=evaluators
+        )
+        return self._finalize_postprocess(
+            raw_content, scaffold, guardrail_check, data_context,
+            skip_disclaimers=skip_disclaimers,
+        )
 
     @staticmethod
     def _append_provenance(content: str, data_context: dict[str, Any] | None) -> str:
@@ -174,20 +209,31 @@ class InnerLLMClient:
         chat_history: list[ChatMessage | HistoryMessage] | None = None,
         max_tokens: int = 2048,
         temperature: float = 0.3,
+        policy: RunPolicy | None = None,
     ) -> LLMResponse:
+        if policy:
+            if policy.temperature is not None:
+                temperature = policy.temperature
+            if policy.max_tokens is not None:
+                max_tokens = policy.max_tokens
+
+        skip_disclaimers = policy.skip_disclaimers if policy else False
+
         full_system = self._build_system_prompt(assembled_prompt.system_message)
         history = self._resolve_history(assembled_prompt, chat_history)
         evaluators = self._resolve_evaluators()
 
-        self._emit(
-            "llm.invoke.start",
-            scaffold_id=scaffold.id,
-            scaffold_version=scaffold.version,
-            history_turns=len(history),
-            max_tokens=max_tokens,
-            temperature=temperature,
-            evaluator_count=len(evaluators),
-        )
+        emit_attrs: dict[str, Any] = {
+            "scaffold_id": scaffold.id,
+            "scaffold_version": scaffold.version,
+            "history_turns": len(history),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "evaluator_count": len(evaluators),
+        }
+        if policy and policy.source:
+            emit_attrs["policy_source"] = policy.source
+        self._emit("llm.invoke.start", **emit_attrs)
 
         resp: ProviderResponse = await self.provider.generate(
             system_message=full_system,
@@ -197,8 +243,9 @@ class InnerLLMClient:
             temperature=temperature,
         )
 
-        content, flags, exports, _ = self._postprocess(
-            resp.content, scaffold, evaluators, data_context
+        content, flags, exports, _ = await self._postprocess_async(
+            resp.content, scaffold, evaluators, data_context,
+            skip_disclaimers=skip_disclaimers,
         )
 
         self._emit(
@@ -224,8 +271,17 @@ class InnerLLMClient:
         chat_history: list[ChatMessage | HistoryMessage] | None = None,
         max_tokens: int = 2048,
         temperature: float = 0.3,
+        policy: RunPolicy | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Yield StreamEvents: chunk → (halted | final)."""
+        if policy:
+            if policy.temperature is not None:
+                temperature = policy.temperature
+            if policy.max_tokens is not None:
+                max_tokens = policy.max_tokens
+
+        skip_disclaimers = policy.skip_disclaimers if policy else False
+
         full_system = self._build_system_prompt(assembled_prompt.system_message)
         history = self._resolve_history(assembled_prompt, chat_history)
         evaluators = self._resolve_evaluators()
@@ -252,8 +308,9 @@ class InnerLLMClient:
             collected.append(chunk)
 
             # Check guardrails incrementally
-            content, flags, exports, passed = self._postprocess(
-                "".join(collected), scaffold, evaluators, data_context
+            content, flags, exports, passed = await self._postprocess_async(
+                "".join(collected), scaffold, evaluators, data_context,
+                skip_disclaimers=skip_disclaimers,
             )
             if not passed:
                 self._emit(
@@ -274,8 +331,9 @@ class InnerLLMClient:
             yield StreamEvent(event="chunk", text=chunk)
 
         # Final pass on complete content
-        content, flags, exports, _ = self._postprocess(
-            "".join(collected).strip(), scaffold, evaluators, data_context
+        content, flags, exports, _ = await self._postprocess_async(
+            "".join(collected).strip(), scaffold, evaluators, data_context,
+            skip_disclaimers=skip_disclaimers,
         )
 
         self._emit(

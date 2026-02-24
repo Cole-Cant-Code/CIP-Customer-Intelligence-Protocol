@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+_PERF_MODE = os.environ.get("CIP_PERF_MODE", "").strip() == "1"
+
 
 class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+    model_config = (
+        ConfigDict(extra="ignore", validate_assignment=False)
+        if _PERF_MODE
+        else ConfigDict(extra="forbid", validate_assignment=True)
+    )
 
 
 def _normalize_string_list(values: list[str]) -> list[str]:

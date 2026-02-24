@@ -17,7 +17,8 @@ dependencies = [
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.50"]
-all = ["anthropic>=0.40", "openai>=1.50"]
+re2 = ["google-re2>=1.1"]
+all = ["anthropic>=0.40", "openai>=1.50", "google-re2>=1.1"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",

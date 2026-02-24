@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml
 
+from cip_protocol.scaffold.matcher import prepare_matcher_cache
 from cip_protocol.scaffold.models import (
     ContextField,
     Scaffold,
@@ -38,6 +39,8 @@ def load_scaffold_directory(directory: str | Path, registry: ScaffoldRegistry) -
             count += 1
         except (yaml.YAMLError, KeyError, ValueError, TypeError) as exc:
             logger.exception("Failed to load scaffold from %s: %s", path, exc)
+    if count > 0:
+        prepare_matcher_cache(registry)
     return count
 
 

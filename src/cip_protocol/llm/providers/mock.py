@@ -12,6 +12,8 @@ class MockProvider:
         self.last_system_message: str = ""
         self.last_user_message: str = ""
         self.last_chat_history: list[dict[str, str]] = []
+        self.last_max_tokens: int = 2048
+        self.last_temperature: float = 0.3
         self.call_count: int = 0
 
     async def generate(
@@ -25,6 +27,8 @@ class MockProvider:
         self.last_system_message = system_message
         self.last_user_message = user_message
         self.last_chat_history = chat_history or []
+        self.last_max_tokens = max_tokens
+        self.last_temperature = temperature
         self.call_count += 1
         return ProviderResponse(
             content=self.response_content,
@@ -45,6 +49,8 @@ class MockProvider:
         self.last_system_message = system_message
         self.last_user_message = user_message
         self.last_chat_history = chat_history or []
+        self.last_max_tokens = max_tokens
+        self.last_temperature = temperature
         self.call_count += 1
 
         for token in self.response_content.split():

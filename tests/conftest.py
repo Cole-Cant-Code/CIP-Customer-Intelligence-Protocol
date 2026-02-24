@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+
 from cip_protocol import DomainConfig
+from cip_protocol.scaffold.matcher import clear_matcher_cache
 from cip_protocol.scaffold.models import (
     Scaffold,
     ScaffoldApplicability,
@@ -10,6 +13,14 @@ from cip_protocol.scaffold.models import (
     ScaffoldGuardrails,
     ScaffoldOutputCalibration,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_matcher_cache():
+    """Clear the matcher cache before each test to avoid cross-test pollution."""
+    clear_matcher_cache()
+    yield
+    clear_matcher_cache()
 
 
 def make_test_scaffold(

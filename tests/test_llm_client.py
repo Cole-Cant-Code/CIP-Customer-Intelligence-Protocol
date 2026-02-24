@@ -9,6 +9,7 @@ from cip_protocol.llm.providers.mock import MockProvider
 from cip_protocol.llm.response import (
     GuardrailEvaluation,
     check_guardrails,
+    check_guardrails_async,
     enforce_disclaimers,
     sanitize_content,
 )
@@ -375,3 +376,47 @@ class TestInnerLLMClient:
         names = [event.name for event in sink.events]
         assert "llm.invoke.start" in names
         assert "llm.invoke.complete" in names
+
+
+class TestAsyncGuardrails:
+    @pytest.mark.asyncio
+    async def test_async_matches_sync(self):
+        scaffold = make_test_scaffold()
+        indicators = {"making guarantees": ("guaranteed to", "i guarantee")}
+        content = "This is guaranteed to work!"
+
+        sync_result = check_guardrails(content, scaffold, prohibited_indicators=indicators)
+        async_result = await check_guardrails_async(
+            content, scaffold, prohibited_indicators=indicators
+        )
+
+        assert sync_result.passed == async_result.passed
+        assert sync_result.flags == async_result.flags
+        assert sync_result.hard_violations == async_result.hard_violations
+        assert sync_result.matched_phrases == async_result.matched_phrases
+
+    @pytest.mark.asyncio
+    async def test_async_clean_content_passes(self):
+        scaffold = make_test_scaffold()
+        result = await check_guardrails_async("Clean response.", scaffold)
+        assert result.passed
+
+    @pytest.mark.asyncio
+    async def test_evaluator_without_async_evaluate_still_works(self):
+        """Evaluators with only sync evaluate() work through the async path."""
+
+        class SyncOnlyEvaluator:
+            name = "sync_only"
+
+            def evaluate(self, content, scaffold):
+                return GuardrailEvaluation(
+                    evaluator_name=self.name,
+                    flags=["sync_flag"],
+                )
+
+        scaffold = make_test_scaffold()
+        result = await check_guardrails_async(
+            "test content", scaffold, evaluators=[SyncOnlyEvaluator()]
+        )
+        assert result.passed
+        assert "sync_flag" in result.flags
