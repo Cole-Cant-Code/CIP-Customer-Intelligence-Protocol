@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import AsyncIterator
+from typing import Any
 
 from cip_protocol.llm.provider import ProviderResponse
 
@@ -27,6 +28,15 @@ class AnthropicProvider:
         messages.append({"role": "user", "content": user_message})
         return messages
 
+    @staticmethod
+    def _extract_text_blocks(content_blocks: list[Any] | None) -> str:
+        text_chunks: list[str] = []
+        for block in content_blocks or []:
+            text = getattr(block, "text", None)
+            if isinstance(text, str) and text:
+                text_chunks.append(text)
+        return "".join(text_chunks)
+
     async def generate(
         self,
         system_message: str,
@@ -44,7 +54,7 @@ class AnthropicProvider:
             messages=self._messages(user_message, chat_history),
         )
         return ProviderResponse(
-            content=response.content[0].text if response.content else "",
+            content=self._extract_text_blocks(getattr(response, "content", None)),
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
             model=self.model,

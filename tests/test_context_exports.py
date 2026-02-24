@@ -80,3 +80,19 @@ class TestContextExports:
         )
         # data_context value takes priority over content extraction
         assert exports["score"] == 42
+
+    def test_export_handles_regex_metacharacters_in_field_name(self):
+        scaffold = make_test_scaffold()
+        scaffold.context_exports = [
+            ContextField(
+                field_name="risk(",
+                type="string",
+                description="Risk signal",
+            )
+        ]
+        exports = extract_context_exports(
+            content="The risk(: high confidence based on current inputs.",
+            scaffold=scaffold,
+            data_context={},
+        )
+        assert exports.get("risk(") == "high confidence based on current inputs"

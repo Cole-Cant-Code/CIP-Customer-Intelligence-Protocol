@@ -115,6 +115,24 @@ class TestSanitization:
         )
         assert "medical diagnosis not permitted" in result
 
+    def test_redaction_respects_word_boundaries(self):
+        from cip_protocol.llm.response import GuardrailCheck
+
+        check = GuardrailCheck(
+            passed=False,
+            flags=["prohibited_pattern_detected: planning ('plan')"],
+            hard_violations=["planning"],
+            matched_phrases=["plan"],
+        )
+        result = sanitize_content(
+            "The planetary model is stable. You should plan next steps.",
+            check,
+            redaction_message="[REDACTED]",
+        )
+        assert "planetary model is stable" in result
+        assert "plan next steps" not in result
+        assert "[REDACTED]" in result
+
 
 class TestDisclaimers:
     def test_missing_disclaimers_appended(self):

@@ -188,7 +188,7 @@ def sanitize_content(
     for phrase in phrases:
         escaped = re.escape(phrase).replace(r"\ ", r"\s+")
         pattern = re.compile(
-            r"[^.!?\n]*(?<!\\w)" + escaped + r"(?!\\w)[^.!?\n]*[.!?]?",
+            r"[^.!?\n]*(?<!\w)" + escaped + r"(?!\w)[^.!?\n]*[.!?]?",
             re.IGNORECASE,
         )
         sanitized = pattern.sub(redaction_message, sanitized)
@@ -233,7 +233,11 @@ def extract_context_exports(
 
 
 def _extract_field_from_content(content: str, field_name: str, field_type: str) -> Any:
-    readable = field_name.replace("_", r"[\s_]")
+    # Escape regex metacharacters while keeping underscore/space matching flexible.
+    parts = [re.escape(part) for part in re.split(r"[_\s]+", field_name.strip()) if part]
+    if not parts:
+        return None
+    readable = r"[\s_]+".join(parts)
 
     if field_type in ("number", "float", "int", "currency"):
         match = re.search(readable + r"[\s:]+\$?([\d,]+\.?\d*)", content, re.IGNORECASE)

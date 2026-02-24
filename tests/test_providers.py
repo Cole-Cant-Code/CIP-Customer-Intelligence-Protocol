@@ -1,8 +1,11 @@
 """Tests for LLM providers."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from cip_protocol.llm.provider import LLMProvider, create_provider
+from cip_protocol.llm.providers.anthropic import AnthropicProvider
 from cip_protocol.llm.providers.mock import MockProvider
 
 
@@ -54,3 +57,17 @@ class TestProviderFactory:
     def test_unknown_provider_raises(self):
         with pytest.raises(ValueError, match="Unknown"):
             create_provider("nonexistent")
+
+
+class TestAnthropicProviderParsing:
+    def test_extract_text_blocks_ignores_non_text_items(self):
+        blocks = [
+            SimpleNamespace(type="tool_use"),
+            SimpleNamespace(type="text", text="Hello"),
+            SimpleNamespace(type="text", text=" world"),
+        ]
+        assert AnthropicProvider._extract_text_blocks(blocks) == "Hello world"
+
+    def test_extract_text_blocks_handles_missing_or_empty(self):
+        assert AnthropicProvider._extract_text_blocks([]) == ""
+        assert AnthropicProvider._extract_text_blocks(None) == ""
