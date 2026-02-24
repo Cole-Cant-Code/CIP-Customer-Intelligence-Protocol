@@ -1,21 +1,60 @@
 # CIP — Customer Intelligence Protocol
 
-Structured reasoning and guardrails for MCP servers that talk to real people
+Give your MCP server a brain that knows how to talk to humans
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+
+---
+
+## What is this?
+
+Most MCP servers are built for developers — return JSON, call a function, done.
+
+**CIP is for building MCP servers that talk to regular people.** It gives an inner LLM a structured reasoning framework ("scaffold") so it can analyze domain data and respond in plain language — with guardrails that actually enforce compliance.
+
+The protocol itself knows nothing about finance, health, legal, or any other domain. You bring the domain. CIP brings the machinery.
 
 ```
 User query → MCP Tool → Scaffold Engine → Inner LLM → Guardrails → Response
 ```
 
-Most MCP servers return JSON and call it a day. CIP is for building MCP servers that talk to *regular people* — it gives an inner LLM a structured reasoning framework ("scaffold") so it can analyze domain data and respond in plain language with guardrails that actually enforce compliance.
+## Why?
 
-The protocol knows nothing about finance, health, legal, or any other domain. You define one `DomainConfig` and point it at a directory of scaffold YAMLs.
+If you're building a consumer-facing MCP server, you need answers to questions that raw LLM calls don't handle:
+
+| Problem | CIP's answer |
+|---|---|
+| How does the LLM know what role to play? | [Scaffold YAMLs](#scaffolds) define role, perspective, tone, and reasoning steps |
+| How do I keep it from saying things it shouldn't? | [Guardrail pipeline](src/cip_protocol/llm/response.py) — pattern matching, regex policies, escalation triggers |
+| How does it pick the right reasoning strategy? | [Scaffold engine](src/cip_protocol/scaffold/engine.py) selects by tool name, intent signals, and keyword scoring |
+| How do I enforce disclaimers? | Automatic — missing disclaimers are appended, violations are redacted |
+| How do I switch domains? | Swap the [`DomainConfig`](src/cip_protocol/domain.py) — same protocol, different domain |
 
 ## Quick start
 
+```sh
+pip install -e ".[all]"   # core + Anthropic + OpenAI
+```
+
+<details>
+<summary>Other install options</summary>
+
+```sh
+pip install -e "."              # core only (mock provider)
+pip install -e ".[anthropic]"   # + Claude
+pip install -e ".[openai]"      # + OpenAI
+pip install -e ".[dev]"         # + pytest, ruff
+```
+
+</details>
+
+### 1. Define your domain
+
+Everything domain-specific lives in one object — [`DomainConfig`](src/cip_protocol/domain.py):
+
 ```python
 from cip_protocol import DomainConfig
-from cip_protocol.scaffold import ScaffoldEngine, ScaffoldRegistry, load_scaffold_directory
-from cip_protocol.llm import InnerLLMClient, create_provider
 
 config = DomainConfig(
     name="personal_finance",
@@ -29,6 +68,28 @@ config = DomainConfig(
     },
     redaction_message="[Removed: contains prohibited financial guidance]",
 )
+```
+
+Same structure, different domain:
+
+```python
+health = DomainConfig(
+    name="health_wellness",
+    display_name="CIP Health",
+    system_prompt="You are a health information specialist...",
+    default_scaffold_id="symptom_overview",
+    prohibited_indicators={
+        "diagnosing conditions": ("you have", "this is definitely"),
+        "prescribing treatment": ("take this medication",),
+    },
+)
+```
+
+### 2. Load scaffolds and wire the engine
+
+```python
+from cip_protocol.scaffold import ScaffoldEngine, ScaffoldRegistry, load_scaffold_directory
+from cip_protocol.llm import InnerLLMClient, create_provider
 
 registry = ScaffoldRegistry()
 load_scaffold_directory("scaffolds/", registry)
@@ -37,7 +98,7 @@ engine = ScaffoldEngine(registry, config=config)
 llm = InnerLLMClient(create_provider("anthropic", api_key="sk-..."), config=config)
 ```
 
-Then in your MCP tool handler:
+### 3. Use it in your MCP tool handler
 
 ```python
 scaffold = engine.select(tool_name="analyze_spending", user_input=user_query)
@@ -45,26 +106,11 @@ prompt = engine.apply(scaffold, user_query=user_query, data_context=spending_dat
 response = await llm.invoke(prompt, scaffold, data_context=spending_data)
 ```
 
-Same structure works for any domain:
-
-```python
-health = DomainConfig(
-    name="health_wellness",
-    display_name="CIP Health",
-    system_prompt="You are a health information specialist...",
-    default_scaffold_id="symptom_overview",
-    data_context_label="Health Records",
-    prohibited_indicators={
-        "diagnosing conditions": ("you have", "this is definitely"),
-        "prescribing treatment": ("take this medication",),
-    },
-    redaction_message="[Removed: contains prohibited medical guidance]",
-)
-```
+That's it. The engine selects the right scaffold, the renderer assembles a structured prompt, the LLM generates a response, and the guardrail pipeline enforces compliance before anything reaches the user.
 
 ## Scaffolds
 
-Scaffolds externalize prompt engineering as YAML. Each file defines how the inner LLM reasons about a specific type of request — its role, reasoning steps, output constraints, and guardrails:
+Scaffolds externalize prompt engineering as YAML. Each file defines how the inner LLM reasons about a specific type of request — role, reasoning steps, output constraints, and guardrails:
 
 ```yaml
 id: symptom_overview
@@ -101,33 +147,80 @@ guardrails:
   prohibited_actions: [Diagnosing medical conditions, Recommending specific medications]
 ```
 
-The engine selects scaffolds using a priority cascade: explicit ID > tool name match > intent signal + keyword scoring.
+The [scaffold engine](src/cip_protocol/scaffold/engine.py) selects scaffolds using a priority cascade: **explicit ID** > **tool name match** > **intent signal + keyword scoring**. See [`matcher.py`](src/cip_protocol/scaffold/matcher.py) for the scoring algorithm.
 
-## Streaming
+Generate a JSON schema for IDE validation and autocomplete: `make schema` → [`docs/scaffold.schema.json`](docs/scaffold.schema.json)
 
-Guardrails run incrementally on each chunk. If a violation is detected mid-stream, the client halts and returns sanitized content.
+<details>
+<summary>Streaming with incremental guardrails</summary>
+
+Guardrails run on every chunk as it arrives. If a violation is detected mid-stream, the client halts immediately and returns sanitized content:
 
 ```python
 async for event in llm.invoke_stream(prompt, scaffold, data_context=data):
     if event.event == "chunk":
         print(event.text, end="")
-    elif event.event in ("halted", "final"):
+    elif event.event == "halted":
+        # guardrail violation — stream killed, content sanitized
+        final = event.response
+    elif event.event == "final":
         final = event.response
 ```
 
-## Install
+See [`InnerLLMClient.invoke_stream`](src/cip_protocol/llm/client.py) for the full implementation.
+
+</details>
+
+<details>
+<summary>Telemetry</summary>
+
+Structured events are emitted for scaffold selection, LLM latency, token usage, and guardrail interventions. Plug in any sink that implements the [`TelemetrySink`](src/cip_protocol/telemetry.py) protocol:
+
+```python
+from cip_protocol import LoggerTelemetrySink, InMemoryTelemetrySink
+
+engine = ScaffoldEngine(registry, config=config, telemetry_sink=LoggerTelemetrySink())
+llm = InnerLLMClient(provider, config=config, telemetry_sink=LoggerTelemetrySink())
+```
+
+</details>
+
+<details>
+<summary>Project structure</summary>
+
+```
+src/cip_protocol/
+├── domain.py              # DomainConfig — the protocol-domain boundary
+├── telemetry.py           # Structured telemetry events and sinks
+├── scaffold/
+│   ├── models.py          # Pydantic models (Scaffold, AssembledPrompt)
+│   ├── registry.py        # In-memory scaffold index (by id/tool/tag)
+│   ├── loader.py          # YAML → Scaffold deserialization
+│   ├── matcher.py         # Multi-criteria scaffold selection
+│   ├── renderer.py        # Scaffold → two-part LLM prompt assembly
+│   ├── engine.py          # select() + apply() orchestrator
+│   └── validator.py       # Scaffold YAML validation
+└── llm/
+    ├── provider.py        # LLMProvider protocol + factory
+    ├── providers/         # Anthropic, OpenAI, mock implementations
+    ├── client.py          # InnerLLMClient (invoke + invoke_stream)
+    └── response.py        # Pluggable guardrail evaluators + sanitization
+```
+
+</details>
+
+## Development
 
 ```sh
-pip install -e "."              # core only (mock provider)
-pip install -e ".[anthropic]"   # + Claude
-pip install -e ".[openai]"      # + OpenAI
-pip install -e ".[all]"         # all providers
-pip install -e ".[dev]"         # + pytest, ruff
+pip install -e ".[dev]"
+make test      # 72 tests
+make lint      # ruff
+make schema    # regenerate scaffold JSON schema
 ```
 
 ## Reference implementation
 
-[CIP-Claude](https://github.com/Cole-Cant-Code/CIP-Claude) — a personal finance MCP server built on this protocol.
+**[CIP-Claude](https://github.com/Cole-Cant-Code/CIP-Claude)** — a personal finance MCP server built on this protocol.
 
 ## License
 
