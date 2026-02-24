@@ -36,8 +36,8 @@ def load_scaffold_directory(directory: str | Path, registry: ScaffoldRegistry) -
             scaffold = load_scaffold_file(path)
             registry.register(scaffold)
             count += 1
-        except Exception:
-            logger.exception("Failed to load scaffold from %s", path)
+        except (yaml.YAMLError, KeyError, ValueError, TypeError) as exc:
+            logger.exception("Failed to load scaffold from %s: %s", path, exc)
     return count
 
 

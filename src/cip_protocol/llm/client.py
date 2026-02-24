@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -223,7 +224,7 @@ class InnerLLMClient:
         chat_history: list[ChatMessage | HistoryMessage] | None = None,
         max_tokens: int = 2048,
         temperature: float = 0.3,
-    ):
+    ) -> AsyncGenerator[StreamEvent, None]:
         """Yield StreamEvents: chunk → (halted | final)."""
         full_system = self._build_system_prompt(assembled_prompt.system_message)
         history = self._resolve_history(assembled_prompt, chat_history)

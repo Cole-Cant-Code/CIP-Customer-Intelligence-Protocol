@@ -186,9 +186,11 @@ def sanitize_content(
 
     sanitized = content
     for phrase in phrases:
+        if len(phrase) > 500:
+            phrase = phrase[:500]
         escaped = re.escape(phrase).replace(r"\ ", r"\s+")
         pattern = re.compile(
-            r"[^.!?\n]*(?<!\w)" + escaped + r"(?!\w)[^.!?\n]*[.!?]?",
+            r"[^.!?\n]{0,500}(?<!\w)" + escaped + r"(?!\w)[^.!?\n]{0,500}[.!?]?",
             re.IGNORECASE,
         )
         sanitized = pattern.sub(redaction_message, sanitized)
@@ -201,9 +203,10 @@ def enforce_disclaimers(content: str, scaffold: Scaffold) -> tuple[str, list[str
     if not disclaimers:
         return content, []
 
-    norm = lambda s: " ".join(s.lower().split())  # noqa: E731
-    content_norm = norm(content)
-    missing = [d for d in disclaimers if norm(d) not in content_norm]
+    def _norm(s: str) -> str:
+        return " ".join(s.lower().split())
+    content_norm = _norm(content)
+    missing = [d for d in disclaimers if _norm(d) not in content_norm]
     if not missing:
         return content, []
 
