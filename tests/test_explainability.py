@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from conftest import make_test_config, make_test_scaffold
 
 from cip_protocol.scaffold.engine import ScaffoldEngine
 from cip_protocol.scaffold.matcher import (
@@ -10,7 +11,6 @@ from cip_protocol.scaffold.matcher import (
     score_scaffolds_explained,
 )
 from cip_protocol.scaffold.registry import ScaffoldRegistry
-from tests.conftest import make_test_config, make_test_scaffold
 
 
 class TestScoreScaffoldsExplained:

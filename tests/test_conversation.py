@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import pytest
+from conftest import make_test_config, make_test_scaffold
 
 from cip_protocol.cip import CIP, CIPResult
 from cip_protocol.conversation import Conversation, Turn
 from cip_protocol.llm.providers.mock import MockProvider
 from cip_protocol.scaffold.registry import ScaffoldRegistry
-from tests.conftest import make_test_config, make_test_scaffold
 
 
 def _make_cip(provider=None) -> CIP:

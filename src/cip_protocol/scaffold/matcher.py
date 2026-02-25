@@ -21,7 +21,6 @@ from dataclasses import dataclass, field
 from cip_protocol.scaffold.models import Scaffold
 from cip_protocol.scaffold.registry import ScaffoldRegistry
 
-
 # ---------------------------------------------------------------------------
 # Defaults — used when the caller provides no SelectionParams.
 # Maximally permissive: don't reject or flag anything by default.
@@ -102,25 +101,35 @@ class SelectionParams:
         return rates.get(layer, 1.0)
 
     def signal_coverage(self) -> float:
-        return self.min_signal_coverage if self.min_signal_coverage is not None else _DEFAULT_MIN_SIGNAL_COVERAGE
+        if self.min_signal_coverage is not None:
+            return self.min_signal_coverage
+        return _DEFAULT_MIN_SIGNAL_COVERAGE
 
     def signal_bonus(self) -> float:
-        return self.exact_signal_bonus if self.exact_signal_bonus is not None else _DEFAULT_EXACT_SIGNAL_BONUS
+        if self.exact_signal_bonus is not None:
+            return self.exact_signal_bonus
+        return _DEFAULT_EXACT_SIGNAL_BONUS
 
     def reinforce(self) -> float:
         return self.reinforcement if self.reinforcement is not None else _DEFAULT_REINFORCEMENT
 
     def activation(self) -> float:
-        return self.layer_activation if self.layer_activation is not None else _DEFAULT_LAYER_ACTIVATION
+        if self.layer_activation is not None:
+            return self.layer_activation
+        return _DEFAULT_LAYER_ACTIVATION
 
     def macro_overlap(self) -> int:
-        return self.macro_min_overlap if self.macro_min_overlap is not None else _DEFAULT_MACRO_MIN_OVERLAP
+        if self.macro_min_overlap is not None:
+            return self.macro_min_overlap
+        return _DEFAULT_MACRO_MIN_OVERLAP
 
     def confidence(self) -> float:
         return self.min_confidence if self.min_confidence is not None else _DEFAULT_MIN_CONFIDENCE
 
     def ambiguity(self) -> float:
-        return self.ambiguity_margin if self.ambiguity_margin is not None else _DEFAULT_AMBIGUITY_MARGIN
+        if self.ambiguity_margin is not None:
+            return self.ambiguity_margin
+        return _DEFAULT_AMBIGUITY_MARGIN
 
 
 # ---------------------------------------------------------------------------
