@@ -182,6 +182,34 @@ def test_load_directory_skips_bad_yaml(tmp_path: Path) -> None:
     assert registry.get("good") is not None
 
 
+def test_load_directory_skips_empty_yaml_file(tmp_path: Path) -> None:
+    _write_yaml(
+        tmp_path / "good.yaml",
+        VALID_SCAFFOLD_YAML.format(id="good", tool="tool_g"),
+    )
+    _write_yaml(tmp_path / "empty.yaml", "")
+
+    registry = ScaffoldRegistry()
+    count = load_scaffold_directory(tmp_path, registry)
+
+    assert count == 1
+    assert registry.get("good") is not None
+
+
+def test_load_directory_skips_non_mapping_yaml_root(tmp_path: Path) -> None:
+    _write_yaml(
+        tmp_path / "good.yaml",
+        VALID_SCAFFOLD_YAML.format(id="good", tool="tool_g"),
+    )
+    _write_yaml(tmp_path / "list_root.yaml", "- not\n- a\n- mapping\n")
+
+    registry = ScaffoldRegistry()
+    count = load_scaffold_directory(tmp_path, registry)
+
+    assert count == 1
+    assert registry.get("good") is not None
+
+
 def test_load_directory_nonexistent_returns_zero(tmp_path: Path) -> None:
     registry = ScaffoldRegistry()
     count = load_scaffold_directory(tmp_path / "does_not_exist", registry)

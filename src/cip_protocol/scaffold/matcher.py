@@ -32,6 +32,7 @@ class _ScaffoldCache:
     keyword_patterns: dict[str, re.Pattern[str]] = field(default_factory=dict)
     match_tokens: set[str] = field(default_factory=set)
     has_tokenless_keyword: bool = False
+    signature: tuple[tuple[str, ...], tuple[str, ...]] = field(default_factory=lambda: ((), ()))
 
 
 _cache: dict[str, _ScaffoldCache] = {}
@@ -42,12 +43,43 @@ def _compile_phrase_pattern(phrase: str) -> re.Pattern[str]:
     return re.compile(rf"(?<!\w){re.escape(phrase.lower())}(?!\w)")
 
 
-def _ensure_cached(scaffold: Scaffold) -> _ScaffoldCache:
-    cached = _cache.get(scaffold.id)
-    if cached is not None:
-        return cached
+def _normalize_phrase(phrase: str) -> str:
+    return " ".join(phrase.lower().split())
 
-    entry = _ScaffoldCache()
+
+def _scaffold_signature(scaffold: Scaffold) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    intent_signals = tuple(sorted(
+        normalized
+        for raw in scaffold.applicability.intent_signals
+        if (normalized := _normalize_phrase(raw))
+    ))
+    keywords = tuple(sorted(
+        normalized
+        for raw in scaffold.applicability.keywords
+        if (normalized := _normalize_phrase(raw))
+    ))
+    return intent_signals, keywords
+
+
+def _evict_scaffold_tokens(scaffold_id: str, tokens: set[str]) -> None:
+    for token in tokens:
+        scaffold_ids = _token_to_scaffold_ids.get(token)
+        if not scaffold_ids:
+            continue
+        scaffold_ids.discard(scaffold_id)
+        if not scaffold_ids:
+            _token_to_scaffold_ids.pop(token, None)
+
+
+def _ensure_cached(scaffold: Scaffold) -> _ScaffoldCache:
+    signature = _scaffold_signature(scaffold)
+    cached = _cache.get(scaffold.id)
+    if cached is not None and cached.signature == signature:
+        return cached
+    if cached is not None:
+        _evict_scaffold_tokens(scaffold.id, cached.match_tokens)
+
+    entry = _ScaffoldCache(signature=signature)
     for signal in scaffold.applicability.intent_signals:
         signal_tokens = _tokenize(signal)
         entry.signal_tokens[signal] = signal_tokens

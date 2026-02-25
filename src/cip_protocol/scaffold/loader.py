@@ -46,7 +46,13 @@ def load_scaffold_directory(directory: str | Path, registry: ScaffoldRegistry) -
 
 def load_scaffold_file(path: Path) -> Scaffold:
     with open(path, encoding="utf-8") as f:
-        data: dict[str, Any] = yaml.safe_load(f)
+        raw_data = yaml.safe_load(f)
+    if raw_data is None:
+        raise ValueError(f"Empty scaffold YAML: {path}")
+    if not isinstance(raw_data, dict):
+        raise ValueError(f"Scaffold YAML root must be a mapping/object: {path}")
+
+    data: dict[str, Any] = raw_data
 
     app = data.get("applicability", {})
     framing = data.get("framing", {})

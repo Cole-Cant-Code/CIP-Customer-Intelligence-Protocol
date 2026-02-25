@@ -178,6 +178,27 @@ class TestMatcherCache:
         _score_scaffolds([s], "show me data")
         assert "lazy" in _cache
 
+    def test_same_id_rebuilds_cache_when_keywords_change(self):
+        """A scaffold id reused with different content refreshes cached patterns/tokens."""
+        original = make_test_scaffold("reused", tools=[], keywords=["alpha"], intent_signals=[])
+        _score_scaffolds([original], "alpha")
+
+        updated = make_test_scaffold("reused", tools=[], keywords=["beta"], intent_signals=[])
+        result = _score_scaffolds([updated], "beta")
+
+        assert result is not None
+        assert result.id == "reused"
+
+    def test_same_id_refresh_drops_old_keyword_matches(self):
+        """After refresh, stale keyword tokens no longer produce matches."""
+        original = make_test_scaffold("reused", tools=[], keywords=["alpha"], intent_signals=[])
+        _score_scaffolds([original], "alpha")
+
+        updated = make_test_scaffold("reused", tools=[], keywords=["beta"], intent_signals=[])
+        _score_scaffolds([updated], "beta")
+
+        assert _score_scaffolds([updated], "alpha") is None
+
 
 class TestConstants:
     def test_intent_weight_greater_than_keyword(self):
