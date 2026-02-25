@@ -1,4 +1,4 @@
-"""Tests for scaffold/matcher.py — selection scoring, tokenization, phrase matching."""
+"""Tests for scaffold/matcher.py — layered selection scoring."""
 
 from __future__ import annotations
 
@@ -9,12 +9,17 @@ from cip_protocol.scaffold.matcher import (
     INTENT_WEIGHT,
     KEYWORD_WEIGHT,
     MIN_SIGNAL_COVERAGE,
+    LayerBreakdown,
+    SelectionParams,
     _cache,
+    _saturate,
     _score_scaffolds,
+    _score_scaffolds_layered,
     _tokenize,
     clear_matcher_cache,
     match_scaffold,
     prepare_matcher_cache,
+    score_scaffolds_explained,
 )
 from cip_protocol.scaffold.registry import ScaffoldRegistry
 
@@ -39,6 +44,29 @@ class TestTokenize:
     def test_case_insensitive(self):
         assert _tokenize("BUDGET Plan") == {"budget", "plan"}
 
+
+class TestSaturate:
+    def test_zero_input(self):
+        assert _saturate(0, 1.0) == 0.0
+
+    def test_negative_input(self):
+        assert _saturate(-1, 1.0) == 0.0
+
+    def test_positive_input(self):
+        result = _saturate(1, 0.7)
+        assert 0.49 < result < 0.51  # ~0.503
+
+    def test_diminishing_returns(self):
+        one = _saturate(1, 0.7)
+        two = _saturate(2, 0.7)
+        three = _saturate(3, 0.7)
+        assert two > one
+        assert three > two
+        # Diminishing: gap from 1->2 > gap from 2->3
+        assert (two - one) > (three - two)
+
+    def test_approaches_one(self):
+        assert _saturate(10, 1.0) > 0.99
 
 
 class TestMatchScaffold:
@@ -89,6 +117,20 @@ class TestMatchScaffold:
         assert result is not None
         assert result.id == "by_tool"
 
+    def test_params_passed_through(self):
+        registry = self._registry()
+        params = SelectionParams(
+            layer_weights={"micro": 0.80, "meso": 0.10, "macro": 0.05, "meta": 0.05},
+        )
+        # With micro heavily weighted, keyword match should dominate
+        result = match_scaffold(
+            registry, "no_match",
+            user_input="help me with my budget savings",
+            params=params,
+        )
+        assert result is not None
+        assert result.id == "by_keyword"
+
 
 class TestScoreScaffolds:
     def test_intent_beats_keyword(self):
@@ -132,6 +174,147 @@ class TestScoreScaffolds:
         assert result.id == "multi"
 
 
+class TestLayeredScoring:
+    def test_layer_breakdown_populated(self):
+        s = make_test_scaffold("s", tools=[], keywords=["budget"], intent_signals=[])
+        params = SelectionParams()
+        _, scores, _, _ = _score_scaffolds_layered([s], "create a budget", params)
+        assert len(scores) > 0
+        top = scores[0]
+        assert isinstance(top.layers, LayerBreakdown)
+        assert top.layers.micro > 0  # "budget" keyword matched
+
+    def test_meso_layer_from_intent_signal(self):
+        s = make_test_scaffold("s", tools=[], keywords=[], intent_signals=["create a budget"])
+        params = SelectionParams()
+        _, scores, _, _ = _score_scaffolds_layered([s], "help me create a budget", params)
+        top = scores[0]
+        assert top.layers.meso > 0
+
+    def test_cross_layer_reinforcement(self):
+        """Score should be higher when multiple layers agree."""
+        both = make_test_scaffold(
+            "both", tools=[], keywords=["budget"], intent_signals=["create a budget"],
+        )
+        params = SelectionParams()
+        _, scores, _, _ = _score_scaffolds_layered([both], "create a budget", params)
+        top = scores[0]
+        # Both micro and meso fired -> interaction > 1.0
+        assert top.interaction_multiplier > 1.0
+
+    def test_custom_weights_change_winner(self):
+        """Custom layer weights can flip which scaffold wins."""
+        kw_heavy = make_test_scaffold(
+            "kw_heavy", tools=[],
+            keywords=["savings", "budget", "plan", "money"],
+            intent_signals=[],
+        )
+        intent_focused = make_test_scaffold(
+            "intent_focused", tools=[],
+            keywords=[],
+            intent_signals=["create a savings plan"],
+        )
+
+        # Default weights: meso=0.4 > micro=0.2, so intent wins
+        default_result = _score_scaffolds(
+            [kw_heavy, intent_focused],
+            "I need a savings plan and a budget for my money",
+        )
+        assert default_result is not None
+        assert default_result.id == "intent_focused"
+
+        # Flip weights: micro=0.7, meso=0.1 — keywords dominate
+        params = SelectionParams(
+            layer_weights={"micro": 0.70, "meso": 0.10, "macro": 0.15, "meta": 0.05},
+        )
+        scaffold, _, _, _ = _score_scaffolds_layered(
+            [kw_heavy, intent_focused],
+            "I need a savings plan and a budget for my money",
+            params,
+        )
+        assert scaffold is not None
+        assert scaffold.id == "kw_heavy"
+
+    def test_confidence_threshold_rejects_weak_match(self):
+        s = make_test_scaffold("s", tools=[], keywords=["budget"], intent_signals=[])
+        params = SelectionParams(min_confidence=0.5)
+        scaffold, _, confidence, _ = _score_scaffolds_layered(
+            [s], "budget", params,
+        )
+        # Single keyword match with default weights produces ~0.10 score
+        assert scaffold is None
+        assert confidence < 0.5
+
+    def test_ambiguity_detection(self):
+        s1 = make_test_scaffold("s1", tools=[], keywords=["budget"], intent_signals=[])
+        s2 = make_test_scaffold("s2", tools=[], keywords=["budget"], intent_signals=[])
+        params = SelectionParams(ambiguity_margin=0.5)
+        scaffold, _, _, ambiguous = _score_scaffolds_layered(
+            [s1, s2], "budget analysis", params,
+        )
+        # Both scaffolds score identically — should be flagged
+        assert ambiguous is True
+
+    def test_meta_layer_domain_hint(self):
+        finance = make_test_scaffold(
+            "finance", domain="finance",
+            tools=[], keywords=["analysis"], intent_signals=[],
+        )
+        health = make_test_scaffold(
+            "health", domain="health",
+            tools=[], keywords=["analysis"], intent_signals=[],
+        )
+        # With domain hint: finance should win
+        params_hint = SelectionParams(context={"domain": "finance"})
+        scaffold, _, _, _ = _score_scaffolds_layered(
+            [finance, health], "run an analysis", params_hint,
+        )
+        assert scaffold is not None
+        assert scaffold.id == "finance"
+
+    def test_saturation_prevents_keyword_count_domination(self):
+        """A scaffold with 10 keywords shouldn't score 10x one with 2."""
+        few = make_test_scaffold(
+            "few", tools=[], keywords=["budget", "plan"], intent_signals=[],
+        )
+        many = make_test_scaffold(
+            "many", tools=[],
+            keywords=["budget", "plan", "savings", "money", "finance",
+                       "spending", "income", "debt", "credit", "tax"],
+            intent_signals=[],
+        )
+        input_text = "budget plan savings money finance spending income debt credit tax"
+        params = SelectionParams()
+        _, scores, _, _ = _score_scaffolds_layered(
+            [few, many], input_text, params,
+        )
+        score_map = {s.scaffold_id: s for s in scores}
+        few_score = score_map["few"].total_score
+        many_score = score_map["many"].total_score
+        # many should win, but not by 5x — saturation limits the advantage
+        assert many_score > few_score
+        assert many_score < few_score * 3
+
+
+class TestScoreScaffoldsExplained:
+    def test_returns_scores_for_all(self):
+        s1 = make_test_scaffold("s1", tools=[], keywords=["budget"], intent_signals=[])
+        s2 = make_test_scaffold("s2", tools=[], keywords=["savings"], intent_signals=[])
+        scores = score_scaffolds_explained([s1, s2], "budget")
+        assert len(scores) == 2
+
+    def test_selection_bias_applied(self):
+        s1 = make_test_scaffold("s1", tools=[], keywords=["money"], intent_signals=[])
+        scores_no_bias = score_scaffolds_explained([s1], "show me money")
+        scores_biased = score_scaffolds_explained(
+            [s1], "show me money", selection_bias={"s1": 2.0},
+        )
+        assert scores_biased[0].total_score > 0
+        assert scores_biased[0].bias_multiplier == 2.0
+        assert scores_biased[0].pre_bias_score == scores_no_bias[0].pre_bias_score
+        assert abs(scores_biased[0].total_score - scores_no_bias[0].total_score * 2.0) < 1e-9
+
+
 class TestMatcherCache:
     def test_prepare_populates_cache(self):
         registry = ScaffoldRegistry()
@@ -160,11 +343,8 @@ class TestMatcherCache:
         scaffolds = [kw, intent]
         user_input = "I want to create a budget"
 
-        # Cold cache
         clear_matcher_cache()
         cold_result = _score_scaffolds(scaffolds, user_input)
-
-        # Warm cache (already populated from first call), re-run
         warm_result = _score_scaffolds(scaffolds, user_input)
 
         assert cold_result is not None
@@ -172,14 +352,12 @@ class TestMatcherCache:
         assert cold_result.id == warm_result.id
 
     def test_lazy_cache_on_first_score(self):
-        """Cache is populated lazily when _score_scaffolds encounters a scaffold."""
         s = make_test_scaffold("lazy", tools=[], keywords=["data"], intent_signals=[])
         assert "lazy" not in _cache
         _score_scaffolds([s], "show me data")
         assert "lazy" in _cache
 
     def test_same_id_rebuilds_cache_when_keywords_change(self):
-        """A scaffold id reused with different content refreshes cached patterns/tokens."""
         original = make_test_scaffold("reused", tools=[], keywords=["alpha"], intent_signals=[])
         _score_scaffolds([original], "alpha")
 
@@ -190,7 +368,6 @@ class TestMatcherCache:
         assert result.id == "reused"
 
     def test_same_id_refresh_drops_old_keyword_matches(self):
-        """After refresh, stale keyword tokens no longer produce matches."""
         original = make_test_scaffold("reused", tools=[], keywords=["alpha"], intent_signals=[])
         _score_scaffolds([original], "alpha")
 

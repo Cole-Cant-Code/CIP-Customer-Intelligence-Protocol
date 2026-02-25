@@ -46,13 +46,19 @@ class TestScoreScaffoldsExplained:
         scores_biased = score_scaffolds_explained(
             [s1], "show me money", selection_bias={"s1": 2.0},
         )
-        assert scores_biased[0].total_score == scores_no_bias[0].total_score * 2.0
         assert scores_biased[0].bias_multiplier == 2.0
-        assert scores_biased[0].pre_bias_score == scores_no_bias[0].total_score
+        assert scores_biased[0].pre_bias_score == scores_no_bias[0].pre_bias_score
+        assert abs(scores_biased[0].total_score - scores_no_bias[0].total_score * 2.0) < 1e-9
 
     def test_empty_scaffolds_returns_empty(self):
         scores = score_scaffolds_explained([], "anything")
         assert scores == []
+
+    def test_layer_breakdown_present(self):
+        s1 = make_test_scaffold("s1", keywords=["spending"])
+        scores = score_scaffolds_explained([s1], "show me my spending")
+        assert hasattr(scores[0], "layers")
+        assert scores[0].layers.micro > 0
 
 
 class TestSelectExplained:
@@ -86,6 +92,12 @@ class TestSelectExplained:
         assert scaffold.id == "s1"
         assert explanation.selection_mode == "scored"
         assert len(explanation.scores) == 2
+
+    def test_scored_mode_has_confidence(self):
+        s1 = make_test_scaffold("s1", keywords=["spending", "money"], tools=[])
+        engine = self._make_engine([s1])
+        scaffold, explanation = engine.select_explained("", user_input="show me my spending money")
+        assert explanation.confidence > 0
 
     def test_default_fallback_mode(self):
         s1 = make_test_scaffold("fallback", keywords=["xyz"], tools=[])

@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 from cip_protocol.domain import DomainConfig
 from cip_protocol.scaffold.matcher import (
     SelectionExplanation,
+    SelectionParams,
+    _score_scaffolds_layered,
     match_scaffold,
     score_scaffolds_explained,
 )
@@ -36,6 +38,29 @@ class ScaffoldEngine:
         self.registry = registry
         self.config = config
         self.telemetry = telemetry_sink or NoOpTelemetrySink()
+        self._last_scaffold_id: str | None = None
+
+    def _build_params(self, policy: RunPolicy | None = None) -> SelectionParams:
+        """Build SelectionParams from policy and engine config."""
+        bias = policy.scaffold_selection_bias if policy else None
+        selection_params = getattr(policy, "selection_params", None) if policy else None
+
+        if isinstance(selection_params, SelectionParams):
+            p = selection_params
+            if bias and not p.selection_bias:
+                p.selection_bias = bias
+        else:
+            p = SelectionParams(selection_bias=bias)
+
+        # Wire engine context into meta layer
+        if p.context is None:
+            p.context = {}
+        if self.config and "domain" not in p.context:
+            p.context["domain"] = self.config.name
+        if self._last_scaffold_id and "prior_scaffold_id" not in p.context:
+            p.context["prior_scaffold_id"] = self._last_scaffold_id
+
+        return p
 
     def select(
         self,
@@ -44,16 +69,17 @@ class ScaffoldEngine:
         caller_scaffold_id: str | None = None,
         policy: RunPolicy | None = None,
     ) -> Scaffold:
-        bias = policy.scaffold_selection_bias if policy else None
+        params = self._build_params(policy)
         scaffold = match_scaffold(
             registry=self.registry,
             tool_name=tool_name,
             user_input=user_input,
             caller_scaffold_id=caller_scaffold_id,
-            selection_bias=bias,
+            params=params,
         )
 
         if scaffold:
+            self._last_scaffold_id = scaffold.id
             self.telemetry.emit(TelemetryEvent(
                 name="scaffold.select",
                 attributes={
@@ -69,6 +95,7 @@ class ScaffoldEngine:
         if default_id:
             default = self.registry.get(default_id)
             if default:
+                self._last_scaffold_id = default.id
                 self.telemetry.emit(TelemetryEvent(
                     name="scaffold.select",
                     attributes={
@@ -93,17 +120,20 @@ class ScaffoldEngine:
         policy: RunPolicy | None = None,
     ) -> tuple[Scaffold, SelectionExplanation]:
         """Like select(), but returns (scaffold, explanation) with selection metadata."""
-        bias = policy.scaffold_selection_bias if policy else None
+        params = self._build_params(policy)
 
         # Priority 1: explicit caller_scaffold_id
         if caller_scaffold_id:
             scaffold = self.registry.get(caller_scaffold_id)
             if scaffold:
+                self._last_scaffold_id = scaffold.id
                 explanation = SelectionExplanation(
                     selected_scaffold_id=scaffold.id,
                     selection_mode="caller_id",
                     tool_name=tool_name,
                     user_input=user_input,
+                    confidence=1.0,
+                    params_used=params,
                 )
                 self.telemetry.emit(TelemetryEvent(
                     name="scaffold.select",
@@ -119,11 +149,14 @@ class ScaffoldEngine:
         tool_matches = self.registry.find_by_tool(tool_name)
         if tool_matches:
             scaffold = tool_matches[0]
+            self._last_scaffold_id = scaffold.id
             explanation = SelectionExplanation(
                 selected_scaffold_id=scaffold.id,
                 selection_mode="tool_match",
                 tool_name=tool_name,
                 user_input=user_input,
+                confidence=1.0,
+                params_used=params,
             )
             self.telemetry.emit(TelemetryEvent(
                 name="scaffold.select",
@@ -135,42 +168,45 @@ class ScaffoldEngine:
             ))
             return scaffold, explanation
 
-        # Priority 3: scored matching
+        # Priority 3: layered scoring
         if user_input:
-            scores = score_scaffolds_explained(
-                self.registry.all(), user_input, selection_bias=bias,
+            scaffold, scores, confidence, ambiguous = _score_scaffolds_layered(
+                self.registry.all(), user_input, params,
             )
-            best = max(scores, key=lambda s: s.total_score) if scores else None
-            if best and best.total_score > 0:
-                scaffold = self.registry.get(best.scaffold_id)
-                if scaffold:
-                    explanation = SelectionExplanation(
-                        selected_scaffold_id=scaffold.id,
-                        selection_mode="scored",
-                        scores=scores,
-                        tool_name=tool_name,
-                        user_input=user_input,
-                    )
-                    self.telemetry.emit(TelemetryEvent(
-                        name="scaffold.select",
-                        attributes={
-                            "tool_name": tool_name,
-                            "selected_scaffold_id": scaffold.id,
-                            "selection_mode": "scored",
-                        },
-                    ))
-                    return scaffold, explanation
+            if scaffold:
+                self._last_scaffold_id = scaffold.id
+                explanation = SelectionExplanation(
+                    selected_scaffold_id=scaffold.id,
+                    selection_mode="scored",
+                    scores=scores,
+                    tool_name=tool_name,
+                    user_input=user_input,
+                    confidence=confidence,
+                    ambiguous=ambiguous,
+                    params_used=params,
+                )
+                self.telemetry.emit(TelemetryEvent(
+                    name="scaffold.select",
+                    attributes={
+                        "tool_name": tool_name,
+                        "selected_scaffold_id": scaffold.id,
+                        "selection_mode": "scored",
+                        "confidence": confidence,
+                        "ambiguous": ambiguous,
+                    },
+                ))
+                return scaffold, explanation
 
         # Priority 4: domain default
         default_id = self.config.default_scaffold_id if self.config else None
         if default_id:
             default = self.registry.get(default_id)
             if default:
-                # Still compute scores for explanation if user_input given
+                self._last_scaffold_id = default.id
                 scores = []
                 if user_input:
                     scores = score_scaffolds_explained(
-                        self.registry.all(), user_input, selection_bias=bias,
+                        self.registry.all(), user_input, params=params,
                     )
                 explanation = SelectionExplanation(
                     selected_scaffold_id=default.id,
@@ -178,6 +214,7 @@ class ScaffoldEngine:
                     scores=scores,
                     tool_name=tool_name,
                     user_input=user_input,
+                    params_used=params,
                 )
                 self.telemetry.emit(TelemetryEvent(
                     name="scaffold.select",
