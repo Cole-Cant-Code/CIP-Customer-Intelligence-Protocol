@@ -330,7 +330,7 @@ class InnerLLMClient:
                     text=content,
                     response=self._build_response(
                         content, scaffold, flags, exports,
-                        {"input_tokens": 0, "output_tokens": len(content.split())},
+                        {"input_tokens": 0, "output_tokens": 0},
                     ),
                 )
                 return
@@ -356,6 +356,6 @@ class InnerLLMClient:
             text=content,
             response=self._build_response(
                 content, scaffold, flags, exports,
-                {"input_tokens": 0, "output_tokens": len(content.split())},
+                {"input_tokens": 0, "output_tokens": 0},
             ),
         )

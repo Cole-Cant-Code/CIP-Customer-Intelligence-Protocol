@@ -95,12 +95,6 @@ def _tokenize(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9']+", text.lower()))
 
 
-def _contains_phrase(haystack: str, phrase: str) -> bool:
-    if not phrase:
-        return False
-    pattern = re.compile(rf"(?<!\w){re.escape(phrase.lower())}(?!\w)")
-    return bool(pattern.search(haystack))
-
 
 def _candidate_scaffolds(scaffolds: list[Scaffold], user_tokens: set[str]) -> list[Scaffold]:
     """Fast candidate pruning: score only scaffolds sharing at least one token."""
@@ -236,40 +230,11 @@ def _score_scaffolds(
     user_input: str,
     selection_bias: dict[str, float] | None = None,
 ) -> Scaffold | None:
-    user_lower = user_input.lower()
-    user_tokens = _tokenize(user_input)
-    candidates = _candidate_scaffolds(scaffolds, user_tokens)
-    if not candidates:
-        return None
-
-    best_match: Scaffold | None = None
-    best_score = 0.0
-
-    for scaffold in candidates:
-        cache = _ensure_cached(scaffold)
-        score = 0.0
-
-        for signal in scaffold.applicability.intent_signals:
-            signal_tokens = cache.signal_tokens.get(signal, set())
-            if not signal_tokens:
-                continue
-            coverage = sum(1 for t in signal_tokens if t in user_tokens) / len(signal_tokens)
-            if coverage >= MIN_SIGNAL_COVERAGE:
-                score += INTENT_WEIGHT * coverage
-            pat = cache.signal_patterns.get(signal)
-            if pat and pat.search(user_lower):
-                score += EXACT_SIGNAL_BONUS
-
-        for kw in scaffold.applicability.keywords:
-            pat = cache.keyword_patterns.get(kw)
-            if pat and pat.search(user_lower):
-                score += KEYWORD_WEIGHT
-
-        if selection_bias:
-            score *= selection_bias.get(scaffold.id, 1.0)
-
-        if score > best_score:
-            best_score = score
-            best_match = scaffold
-
-    return best_match if best_score > 0 else None
+    scores = score_scaffolds_explained(scaffolds, user_input, selection_bias=selection_bias)
+    best = max(scores, key=lambda s: s.total_score) if scores else None
+    if best and best.total_score > 0:
+        # Find the scaffold object by ID
+        for scaffold in scaffolds:
+            if scaffold.id == best.scaffold_id:
+                return scaffold
+    return None

@@ -112,13 +112,14 @@ class EscalationTriggerEvaluator:
 
     def evaluate(self, content: str, scaffold: Scaffold) -> GuardrailEvaluation:
         content_lower = " ".join(content.lower().split())
+        content_words = set(content_lower.split())
         flags: list[str] = []
 
         for trigger in scaffold.guardrails.escalation_triggers:
             words = trigger.lower().split()
             if not words:
                 continue
-            if sum(1 for w in words if w in content_lower) >= len(words) * self.threshold_ratio:
+            if sum(1 for w in words if w in content_words) >= len(words) * self.threshold_ratio:
                 flags.append(f"escalation_trigger_detected: {trigger}")
 
         return GuardrailEvaluation(evaluator_name=self.name, flags=flags)

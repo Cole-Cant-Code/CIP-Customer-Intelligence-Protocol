@@ -78,6 +78,18 @@ class TestGuardrails:
         # Escalation triggers are soft — they don't fail the check
         assert result.passed
 
+    def test_escalation_trigger_no_substring_false_positive(self):
+        """Trigger word 'cat' should not match inside 'category' or 'concatenation'."""
+        scaffold = make_test_scaffold(
+            escalation_triggers=["cat emergency"]
+        )
+        result = check_guardrails(
+            "The category of concatenation is well-defined.",
+            scaffold,
+        )
+        assert not any("escalation" in f for f in result.flags)
+        assert result.passed
+
 
 class TestSanitization:
     def test_clean_content_unchanged(self):

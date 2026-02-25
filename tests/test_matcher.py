@@ -10,7 +10,6 @@ from cip_protocol.scaffold.matcher import (
     KEYWORD_WEIGHT,
     MIN_SIGNAL_COVERAGE,
     _cache,
-    _contains_phrase,
     _score_scaffolds,
     _tokenize,
     clear_matcher_cache,
@@ -40,23 +39,6 @@ class TestTokenize:
     def test_case_insensitive(self):
         assert _tokenize("BUDGET Plan") == {"budget", "plan"}
 
-
-class TestContainsPhrase:
-    def test_exact_match(self):
-        assert _contains_phrase("create a budget", "budget")
-
-    def test_word_boundary_no_partial(self):
-        assert not _contains_phrase("planetary motion", "plan")
-
-    def test_phrase_match(self):
-        assert _contains_phrase("i want to create a budget", "create a budget")
-
-    def test_empty_phrase_returns_false(self):
-        assert not _contains_phrase("anything", "")
-
-    def test_caller_lowercases_haystack(self):
-        # _contains_phrase expects pre-lowered haystack (callers pass user_lower)
-        assert _contains_phrase("create a budget", "Create A Budget")
 
 
 class TestMatchScaffold:
