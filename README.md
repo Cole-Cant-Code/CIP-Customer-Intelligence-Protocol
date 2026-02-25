@@ -4,37 +4,19 @@ Structured reasoning, guardrails, and runtime control for consumer-facing MCP se
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Tests: 207](https://img.shields.io/badge/tests-207_passing-brightgreen.svg)](tests/)
+[![Tests: 242](https://img.shields.io/badge/tests-242_passing-brightgreen.svg)](tests/)
 
 ```python
-from cip_protocol import DomainConfig, ConstraintParser
-from cip_protocol.scaffold import ScaffoldEngine, ScaffoldRegistry, load_scaffold_directory
-from cip_protocol.llm import InnerLLMClient, create_provider
+from cip_protocol import CIP, DomainConfig
 
-config = DomainConfig(
-    name="personal_finance",
-    display_name="CIP Personal Finance",
-    system_prompt="You are an expert in consumer personal finance.",
-    default_scaffold_id="spending_review",
-    prohibited_indicators={
-        "recommending products": ("i recommend", "sign up for"),
-        "making predictions": ("the market will", "guaranteed to"),
-    },
-)
+config = DomainConfig(name="personal_finance", system_prompt="You are a finance expert.")
+cip = CIP.from_config(config, "scaffolds/", "anthropic", api_key="sk-...")
 
-registry = ScaffoldRegistry()
-load_scaffold_directory("scaffolds/", registry)
-engine = ScaffoldEngine(registry, config=config)
-llm = InnerLLMClient(create_provider("anthropic", api_key="sk-..."), config=config)
+result = await cip.run("where is my money going?", data_context=spending_data)
+print(result.response.content)
 
-# Select reasoning strategy, render prompt, invoke with guardrails
-scaffold = engine.select(tool_name="analyze_spending", user_input="where is my money going?")
-prompt = engine.apply(scaffold, user_query="where is my money going?", data_context=spending_data)
-response = await llm.invoke(prompt, scaffold, data_context=spending_data)
-
-# Or override behavior at runtime — no config changes, no YAML edits
-policy = ConstraintParser.parse("be more creative, skip disclaimers, under 500 words").policy
-response = await llm.invoke(prompt, scaffold, data_context=spending_data, policy=policy)
+# Override behavior at runtime — plain English, no config changes
+result = await cip.run("same but shorter", policy="be concise, bullet points")
 ```
 
 ---
@@ -90,33 +72,33 @@ pip install -e ".[dev]"         # + pytest, ruff
 
 </details>
 
-### 1. Define your domain
-
-Everything domain-specific lives in one object — [`DomainConfig`](src/cip_protocol/domain.py):
+### 1. Define your domain and run
 
 ```python
-from cip_protocol import DomainConfig
+from cip_protocol import CIP, DomainConfig
 
 config = DomainConfig(
     name="personal_finance",
     display_name="CIP Personal Finance",
-    system_prompt="You are an expert in consumer personal finance...",
+    system_prompt="You are an expert in consumer personal finance.",
     default_scaffold_id="spending_review",
-    data_context_label="Financial Data",
     prohibited_indicators={
         "recommending products": ("i recommend", "sign up for"),
         "making predictions": ("the market will", "guaranteed to"),
     },
-    redaction_message="[Removed: contains prohibited financial guidance]",
 )
+
+cip = CIP.from_config(config, "scaffolds/", "anthropic", api_key="sk-...")
+result = await cip.run("where is my money going?", data_context=spending_data)
 ```
+
+The facade handles scaffold loading, selection, prompt assembly, LLM invocation, and guardrail enforcement in one call. `result` includes the response, which scaffold was selected, how it was selected, and the scores.
 
 Same structure, different domain:
 
 ```python
 health = DomainConfig(
     name="health_wellness",
-    display_name="CIP Health",
     system_prompt="You are a health information specialist...",
     default_scaffold_id="symptom_overview",
     prohibited_indicators={
@@ -124,9 +106,89 @@ health = DomainConfig(
         "prescribing treatment": ("take this medication",),
     },
 )
+cip = CIP.from_config(health, "scaffolds/", "anthropic", api_key="sk-...")
 ```
 
-### 2. Load scaffolds and wire the engine
+### 2. Multi-turn conversations
+
+```python
+conv = cip.conversation(max_history_turns=20)
+
+r1 = await conv.say("where is my money going?", data_context=spending_data)
+r2 = await conv.say("break that down by category")   # history carries forward
+r3 = await conv.say("focus on the top 3")             # context accumulates
+
+conv.turn_count   # 3
+conv.history      # full message list
+conv.reset()      # start fresh
+```
+
+History is truncated to `max_history_turns` pairs. Context exports from each turn accumulate and merge into subsequent calls automatically.
+
+### 3. Override behavior at runtime
+
+No config changes. No YAML edits. Just tell CIP what you want:
+
+```python
+# Plain English — parsed into a RunPolicy
+result = await cip.run("analyze my spending", policy="be creative, skip disclaimers")
+
+# Or from a built-in preset
+from cip_protocol import RunPolicy
+from cip_protocol.control import BUILTIN_PRESETS
+
+policy = RunPolicy.from_preset(BUILTIN_PRESETS["aggressive"])
+result = await cip.run("analyze my spending", policy=policy)
+
+# Or construct directly
+result = await cip.run("analyze my spending", policy=RunPolicy(temperature=0.8, compact=True))
+```
+
+### 4. Explainability
+
+Every `CIPResult` tells you how the scaffold was selected:
+
+```python
+result = await cip.run("where is my money going?", data_context=data)
+
+result.scaffold_id          # "spending_review"
+result.selection_mode       # "scored" | "tool_match" | "caller_id" | "default"
+result.selection_scores     # {"spending_review": 3.50, "budget_overview": 1.00}
+result.policy_source        # "constraint:brief+bullet_format"
+result.unrecognized_constraints  # ["do a backflip"] — nothing silently dropped
+```
+
+### 5. CLI playground
+
+Try scaffolds interactively without writing code:
+
+```sh
+python -m cip_protocol playground --scaffold-dir=scaffolds/ --provider=mock
+
+CIP Playground
+Provider: mock | Domain: playground
+Scaffolds loaded: 3
+Type /help for commands, /quit to exit.
+
+you> where is my money going?
+[scaffold: spending_review | mode: scored | score: 3.50]
+cip> Based on your spending data...
+
+you> /policy be creative, skip disclaimers
+Policy set: be creative, skip disclaimers
+
+you> /explain
+Selection mode: scored
+Selected: spending_review
+Scores:
+  spending_review: 3.50
+  budget_overview: 1.00
+```
+
+<details>
+<summary>Manual wiring (without facade)</summary>
+
+For full control over each component:
 
 ```python
 from cip_protocol.scaffold import ScaffoldEngine, ScaffoldRegistry, load_scaffold_directory
@@ -134,42 +196,15 @@ from cip_protocol.llm import InnerLLMClient, create_provider
 
 registry = ScaffoldRegistry()
 load_scaffold_directory("scaffolds/", registry)
-
 engine = ScaffoldEngine(registry, config=config)
 llm = InnerLLMClient(create_provider("anthropic", api_key="sk-..."), config=config)
-```
 
-### 3. Use it in your MCP tool handler
-
-```python
-scaffold = engine.select(tool_name="analyze_spending", user_input=user_query)
-prompt = engine.apply(scaffold, user_query=user_query, data_context=spending_data)
-response = await llm.invoke(prompt, scaffold, data_context=spending_data)
-```
-
-That's it. The engine selects the right scaffold, the renderer assembles a structured prompt, the LLM generates a response, and the guardrail pipeline enforces compliance before anything reaches the user.
-
-### 4. Override behavior at runtime
-
-No config changes. No YAML edits. Just tell CIP what you want:
-
-```python
-from cip_protocol import ConstraintParser, RunPolicy
-
-# Plain English
-policy = ConstraintParser.parse("be more creative, skip disclaimers, under 300 words").policy
-
-# Or from a built-in preset
-policy = RunPolicy.from_preset(BUILTIN_PRESETS["aggressive"])
-
-# Or construct directly
-policy = RunPolicy(temperature=0.8, skip_disclaimers=True, compact=True)
-
-# Pass it anywhere — select, apply, invoke all accept policy
-scaffold = engine.select(tool_name="analyze_spending", user_input=query, policy=policy)
-prompt = engine.apply(scaffold, user_query=query, data_context=data, policy=policy)
+scaffold = engine.select(tool_name="analyze_spending", user_input=query)
+prompt = engine.apply(scaffold, user_query=query, data_context=data)
 response = await llm.invoke(prompt, scaffold, data_context=data, policy=policy)
 ```
+
+</details>
 
 ## Scaffolds
 
@@ -353,16 +388,21 @@ llm = InnerLLMClient(provider, config=config, telemetry_sink=LoggerTelemetrySink
 
 ```
 src/cip_protocol/
+├── cip.py                 # CIP facade + CIPResult (3-line entry point)
+├── conversation.py        # Multi-turn Conversation + Turn
+├── __main__.py            # CLI entry point (python -m cip_protocol)
 ├── domain.py              # DomainConfig — the protocol-domain boundary
 ├── control.py             # RunPolicy, presets, constraint parser
 ├── telemetry.py           # Structured telemetry events and sinks
+├── cli/
+│   └── playground.py      # Interactive REPL with /policy, /explain, etc.
 ├── scaffold/
 │   ├── models.py          # Pydantic models (Scaffold, AssembledPrompt)
 │   ├── registry.py        # In-memory scaffold index (by id/tool/tag)
 │   ├── loader.py          # YAML → Scaffold deserialization
-│   ├── matcher.py         # Multi-criteria scaffold selection + caching
+│   ├── matcher.py         # Multi-criteria selection + explainability
 │   ├── renderer.py        # Scaffold → two-part LLM prompt assembly
-│   ├── engine.py          # select() + apply() orchestrator
+│   ├── engine.py          # select() + select_explained() + apply()
 │   └── validator.py       # Scaffold YAML validation
 └── llm/
     ├── provider.py        # LLMProvider protocol + factory
@@ -377,7 +417,7 @@ src/cip_protocol/
 
 ```sh
 pip install -e ".[dev]"
-make test      # 207 tests
+make test      # 242 tests
 make lint      # ruff
 make schema    # regenerate scaffold JSON schema
 ```
