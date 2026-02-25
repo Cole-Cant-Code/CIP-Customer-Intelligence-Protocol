@@ -177,6 +177,21 @@ class TestInnerLLMClient:
         assert provider.call_count == 1
 
     @pytest.mark.asyncio
+    async def test_default_evaluator_pipeline_cached(self):
+        provider = MockProvider(response_content="Stable output.")
+        client = InnerLLMClient(provider, config=make_test_config())
+        scaffold = make_test_scaffold()
+        prompt = AssembledPrompt(system_message="Analyze.", user_message="Query.")
+
+        initial = client._resolve_evaluators()
+        await client.invoke(assembled_prompt=prompt, scaffold=scaffold)
+        await client.invoke(assembled_prompt=prompt, scaffold=scaffold)
+        final = client._resolve_evaluators()
+
+        assert initial is final
+        assert all(a is b for a, b in zip(initial, final))
+
+    @pytest.mark.asyncio
     async def test_system_prompt_prepended(self):
         config = make_test_config()
         provider = MockProvider()

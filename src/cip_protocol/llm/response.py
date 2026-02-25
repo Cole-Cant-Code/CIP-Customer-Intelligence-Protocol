@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import logging
 import re
 from dataclasses import dataclass, field
@@ -95,6 +96,10 @@ def _contains_indicator(content_lower: str, pattern: str) -> bool:
     return bool(compiled.search(content_lower))
 
 
+def _tokenize(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9']+", text.lower()))
+
+
 # ---------------------------------------------------------------------------
 # Evaluators
 # ---------------------------------------------------------------------------
@@ -118,33 +123,39 @@ class EscalationTriggerEvaluator:
 
         return GuardrailEvaluation(evaluator_name=self.name, flags=flags)
 
-    async def async_evaluate(self, content: str, scaffold: Scaffold) -> GuardrailEvaluation:
-        return self.evaluate(content, scaffold)
-
 
 class ProhibitedPatternEvaluator:
     name = "prohibited_pattern"
 
     def __init__(self, indicators: dict[str, tuple[str, ...]]) -> None:
         self.indicators = indicators
-        self._compiled: dict[str, list[tuple[str, re.Pattern[str]]]] = {}
+        self._compiled: dict[str, list[tuple[str, re.Pattern[str], set[str]]]] = {}
+
         for action, patterns in indicators.items():
-            compiled_list: list[tuple[str, re.Pattern[str]]] = []
+            compiled_list: list[tuple[str, re.Pattern[str], set[str]]] = []
             for pattern in patterns:
                 normalized = " ".join(pattern.lower().split())
                 if not normalized:
                     continue
-                compiled_list.append((pattern, _compile_indicator_pattern(normalized)))
+                compiled_list.append((
+                    pattern,
+                    _compile_indicator_pattern(normalized),
+                    _tokenize(normalized),
+                ))
             self._compiled[action] = compiled_list
 
     def evaluate(self, content: str, scaffold: Scaffold) -> GuardrailEvaluation:
+        _ = scaffold
         content_lower = " ".join(content.lower().split())
+        content_tokens = _tokenize(content_lower)
         flags: list[str] = []
         violations: list[str] = []
         phrases: list[str] = []
 
         for action, compiled_patterns in self._compiled.items():
-            for raw_pattern, regex in compiled_patterns:
+            for raw_pattern, regex, pattern_tokens in compiled_patterns:
+                if pattern_tokens and not pattern_tokens.issubset(content_tokens):
+                    continue
                 if regex.search(content_lower):
                     flags.append(f"prohibited_pattern_detected: {action} ('{raw_pattern}')")
                     violations.append(action)
@@ -157,9 +168,6 @@ class ProhibitedPatternEvaluator:
             matched_phrases=phrases,
         )
 
-    async def async_evaluate(self, content: str, scaffold: Scaffold) -> GuardrailEvaluation:
-        return self.evaluate(content, scaffold)
-
 
 class RegexPolicyEvaluator:
     name = "regex_policy"
@@ -171,6 +179,7 @@ class RegexPolicyEvaluator:
         }
 
     def evaluate(self, content: str, scaffold: Scaffold) -> GuardrailEvaluation:
+        _ = scaffold
         flags: list[str] = []
         violations: list[str] = []
 
@@ -184,9 +193,6 @@ class RegexPolicyEvaluator:
             flags=flags,
             hard_violations=violations,
         )
-
-    async def async_evaluate(self, content: str, scaffold: Scaffold) -> GuardrailEvaluation:
-        return self.evaluate(content, scaffold)
 
 
 # ---------------------------------------------------------------------------
@@ -245,27 +251,33 @@ def check_guardrails(
     return _aggregate_results(results)
 
 
-async def _run_evaluator(
-    evaluator: GuardrailEvaluator, content: str, scaffold: Scaffold,
-) -> GuardrailEvaluation:
-    async_fn = getattr(evaluator, "async_evaluate", None)
-    if async_fn is not None and callable(async_fn):
-        return await async_fn(content, scaffold)
-    return evaluator.evaluate(content, scaffold)
-
-
 async def check_guardrails_async(
     content: str,
     scaffold: Scaffold,
     prohibited_indicators: dict[str, tuple[str, ...]] | None = None,
     evaluators: list[GuardrailEvaluator] | None = None,
 ) -> GuardrailCheck:
-    """Async version of check_guardrails. Runs evaluators concurrently."""
+    """Async version of check_guardrails. Runs async evaluators concurrently."""
     active = evaluators or default_guardrail_evaluators(prohibited_indicators)
-    results = await asyncio.gather(
-        *(_run_evaluator(ev, content, scaffold) for ev in active)
-    )
-    return _aggregate_results(list(results))
+    sync_results: list[GuardrailEvaluation] = []
+    async_coroutines: list[Any] = []
+
+    for evaluator in active:
+        async_fn = getattr(evaluator, "async_evaluate", None)
+        if async_fn is None or not callable(async_fn):
+            sync_results.append(evaluator.evaluate(content, scaffold))
+            continue
+
+        maybe_awaitable = async_fn(content, scaffold)
+        if inspect.isawaitable(maybe_awaitable):
+            async_coroutines.append(maybe_awaitable)
+        else:
+            sync_results.append(maybe_awaitable)
+
+    if async_coroutines:
+        sync_results.extend(await asyncio.gather(*async_coroutines))
+
+    return _aggregate_results(sync_results)
 
 
 # ---------------------------------------------------------------------------
@@ -341,24 +353,40 @@ def extract_context_exports(
     return exports
 
 
-def _extract_field_from_content(content: str, field_name: str, field_type: str) -> Any:
+@functools.lru_cache(maxsize=256)
+def _compile_export_extractor(
+    field_name: str, field_type: str,
+) -> tuple[re.Pattern[str] | None, str]:
     # Escape regex metacharacters while keeping underscore/space matching flexible.
     parts = [re.escape(part) for part in re.split(r"[_\s]+", field_name.strip()) if part]
     if not parts:
-        return None
+        return None, ""
+
     readable = r"[\s_]+".join(parts)
+    kind = field_type.lower().strip()
 
-    if field_type in ("number", "float", "int", "currency"):
-        match = re.search(readable + r"[\s:]+\$?([\d,]+\.?\d*)", content, re.IGNORECASE)
-        if match:
-            try:
-                return float(match.group(1).replace(",", ""))
-            except ValueError:
-                return None
+    if kind in ("number", "float", "int", "currency"):
+        return _compile(readable + r"[\s:]+\$?([\d,]+\.?\d*)", re.IGNORECASE), "number"
+    if kind in ("string", "str", "text"):
+        return _compile(readable + r"[\s:]+([^\n.]+)", re.IGNORECASE), "string"
+    return None, ""
 
-    elif field_type in ("string", "str", "text"):
-        match = re.search(readable + r"[\s:]+([^\n.]+)", content, re.IGNORECASE)
-        if match:
-            return match.group(1).strip()
+
+def _extract_field_from_content(content: str, field_name: str, field_type: str) -> Any:
+    extractor, extractor_type = _compile_export_extractor(field_name, field_type)
+    if extractor is None:
+        return None
+
+    match = extractor.search(content)
+    if not match:
+        return None
+
+    if extractor_type == "number":
+        try:
+            return float(match.group(1).replace(",", ""))
+        except ValueError:
+            return None
+    if extractor_type == "string":
+        return match.group(1).strip()
 
     return None

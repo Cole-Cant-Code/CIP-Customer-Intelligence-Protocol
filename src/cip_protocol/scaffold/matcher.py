@@ -30,9 +30,12 @@ class _ScaffoldCache:
     signal_tokens: dict[str, set[str]] = field(default_factory=dict)
     signal_patterns: dict[str, re.Pattern[str]] = field(default_factory=dict)
     keyword_patterns: dict[str, re.Pattern[str]] = field(default_factory=dict)
+    match_tokens: set[str] = field(default_factory=set)
+    has_tokenless_keyword: bool = False
 
 
 _cache: dict[str, _ScaffoldCache] = {}
+_token_to_scaffold_ids: dict[str, set[str]] = {}
 
 
 def _compile_phrase_pattern(phrase: str) -> re.Pattern[str]:
@@ -46,17 +49,29 @@ def _ensure_cached(scaffold: Scaffold) -> _ScaffoldCache:
 
     entry = _ScaffoldCache()
     for signal in scaffold.applicability.intent_signals:
-        entry.signal_tokens[signal] = _tokenize(signal)
+        signal_tokens = _tokenize(signal)
+        entry.signal_tokens[signal] = signal_tokens
+        entry.match_tokens.update(signal_tokens)
         lower = signal.lower()
         if lower:
             entry.signal_patterns[signal] = _compile_phrase_pattern(signal)
 
     for kw in scaffold.applicability.keywords:
+        keyword_tokens = _tokenize(kw)
+        if keyword_tokens:
+            entry.match_tokens.update(keyword_tokens)
+        elif kw.strip():
+            # Preserve matching for keywords that normalize to no alphanumeric tokens.
+            entry.has_tokenless_keyword = True
         lower = kw.lower()
         if lower:
             entry.keyword_patterns[kw] = _compile_phrase_pattern(kw)
 
     _cache[scaffold.id] = entry
+
+    for token in entry.match_tokens:
+        _token_to_scaffold_ids.setdefault(token, set()).add(scaffold.id)
+
     return entry
 
 
@@ -69,6 +84,7 @@ def prepare_matcher_cache(registry: ScaffoldRegistry) -> None:
 def clear_matcher_cache() -> None:
     """Clear the matcher cache. Useful in tests."""
     _cache.clear()
+    _token_to_scaffold_ids.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +100,27 @@ def _contains_phrase(haystack: str, phrase: str) -> bool:
         return False
     pattern = re.compile(rf"(?<!\w){re.escape(phrase.lower())}(?!\w)")
     return bool(pattern.search(haystack))
+
+
+def _candidate_scaffolds(scaffolds: list[Scaffold], user_tokens: set[str]) -> list[Scaffold]:
+    """Fast candidate pruning: score only scaffolds sharing at least one token."""
+    if not scaffolds or not user_tokens:
+        return scaffolds
+
+    for scaffold in scaffolds:
+        _ensure_cached(scaffold)
+
+    candidate_ids: set[str] = set()
+    for token in user_tokens:
+        candidate_ids.update(_token_to_scaffold_ids.get(token, set()))
+
+    if not candidate_ids:
+        return []
+
+    return [
+        scaffold for scaffold in scaffolds
+        if scaffold.id in candidate_ids or _cache[scaffold.id].has_tokenless_keyword
+    ]
 
 
 def match_scaffold(
@@ -135,9 +172,21 @@ def score_scaffolds_explained(
     """Score all scaffolds with per-scaffold breakdown."""
     user_lower = user_input.lower()
     user_tokens = _tokenize(user_input)
+    candidates = _candidate_scaffolds(scaffolds, user_tokens)
+    candidate_ids = {s.id for s in candidates}
     results: list[ScaffoldScore] = []
 
     for scaffold in scaffolds:
+        if scaffold.id not in candidate_ids:
+            multiplier = selection_bias.get(scaffold.id, 1.0) if selection_bias else 1.0
+            results.append(ScaffoldScore(
+                scaffold_id=scaffold.id,
+                total_score=0.0,
+                bias_multiplier=multiplier,
+                pre_bias_score=0.0,
+            ))
+            continue
+
         cache = _ensure_cached(scaffold)
         intent_scores: dict[str, float] = {}
         keyword_scores: dict[str, float] = {}
@@ -189,10 +238,14 @@ def _score_scaffolds(
 ) -> Scaffold | None:
     user_lower = user_input.lower()
     user_tokens = _tokenize(user_input)
+    candidates = _candidate_scaffolds(scaffolds, user_tokens)
+    if not candidates:
+        return None
+
     best_match: Scaffold | None = None
     best_score = 0.0
 
-    for scaffold in scaffolds:
+    for scaffold in candidates:
         cache = _ensure_cached(scaffold)
         score = 0.0
 

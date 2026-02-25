@@ -56,6 +56,12 @@ class InnerLLMClient:
         self.config = config
         self.guardrail_evaluators = guardrail_evaluators
         self.telemetry = telemetry_sink or NoOpTelemetrySink()
+        if guardrail_evaluators is not None:
+            self._resolved_evaluators = guardrail_evaluators
+        else:
+            prohibited = self.config.prohibited_indicators if self.config else None
+            regex = self.config.regex_guardrail_policies if self.config else None
+            self._resolved_evaluators = default_guardrail_evaluators(prohibited, regex)
 
     def _build_system_prompt(self, scaffold_system_message: str) -> str:
         if not self.config or not self.config.system_prompt:
@@ -88,11 +94,7 @@ class InnerLLMClient:
         return self._normalize_history(source)
 
     def _resolve_evaluators(self) -> list[GuardrailEvaluator]:
-        if self.guardrail_evaluators is not None:
-            return self.guardrail_evaluators
-        prohibited = self.config.prohibited_indicators if self.config else None
-        regex = self.config.regex_guardrail_policies if self.config else None
-        return default_guardrail_evaluators(prohibited, regex)
+        return self._resolved_evaluators
 
     @property
     def _redaction_message(self) -> str:
@@ -306,13 +308,18 @@ class InnerLLMClient:
                 continue
 
             collected.append(chunk)
+            raw_content = "".join(collected)
 
-            # Check guardrails incrementally
-            content, flags, exports, passed = await self._postprocess_async(
-                "".join(collected), scaffold, evaluators, data_context,
-                skip_disclaimers=skip_disclaimers,
+            # Hot path optimization: run guardrail checks per chunk, defer
+            # expensive disclaimer/context/provenance processing until halt/final.
+            guardrail_check = await check_guardrails_async(
+                raw_content, scaffold, evaluators=evaluators
             )
-            if not passed:
+            if not guardrail_check.passed:
+                content, flags, exports, _passed = self._finalize_postprocess(
+                    raw_content, scaffold, guardrail_check, data_context,
+                    skip_disclaimers=skip_disclaimers,
+                )
                 self._emit(
                     "llm.stream.halted",
                     scaffold_id=scaffold.id,
