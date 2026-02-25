@@ -1,10 +1,10 @@
 # CIP — Customer Intelligence Protocol
 
-Structured reasoning, guardrails, and runtime control for consumer-facing MCP servers
+Structured reasoning frameworks and safety boundaries for consumer-facing MCP servers
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Tests: 242](https://img.shields.io/badge/tests-242_passing-brightgreen.svg)](tests/)
+[![Tests: 292](https://img.shields.io/badge/tests-292_passing-brightgreen.svg)](tests/)
 
 ```python
 from cip_protocol import CIP, DomainConfig
@@ -25,9 +25,9 @@ result = await cip.run("same but shorter", policy="be concise, bullet points")
 
 Most MCP servers are built for developers — return JSON, call a function, done.
 
-**CIP is for MCP servers that talk to regular people.** It gives an inner LLM a structured reasoning framework ("scaffold") so it can analyze domain data and respond in plain language — with guardrails that enforce compliance and a control surface that lets you tune behavior per-request.
+**CIP is for MCP servers that talk to regular people.** It gives an inner LLM structured reasoning frameworks ("scaffolds") so it can analyze domain data and respond in plain language — with safety boundaries that catch real mistakes on the way out, and a policy layer that lets you adjust behavior per-request without editing config.
 
-The protocol knows nothing about finance, health, legal, or any domain. You bring the domain. CIP brings the machinery.
+The LLM does the thinking. CIP gives it structure to think well and boundaries that matter. The protocol knows nothing about finance, health, legal, or any domain. You bring the domain. CIP brings the framework.
 
 ```
                     ┌─────────────────────────────────────────┐
@@ -35,7 +35,7 @@ The protocol knows nothing about finance, health, legal, or any domain. You brin
                     │  "be creative, skip disclaimers, brief" │
                     └──────┬──────────┬──────────┬────────────┘
                            │          │          │
-User query → MCP Tool → Select → Render → Invoke → Guardrails → Response
+User query → MCP Tool → Select → Render → Invoke → Safety → Response
                            │          │          │
                         scaffold   assembled   temperature
                         matching    prompt     max_tokens
@@ -46,12 +46,12 @@ User query → MCP Tool → Select → Render → Invoke → Guardrails → Resp
 
 | Problem | CIP's answer |
 |---|---|
-| How does the LLM know what role to play? | [Scaffold YAMLs](#scaffolds) define role, perspective, tone, and reasoning steps |
-| How do I keep it from saying things it shouldn't? | [Guardrail pipeline](src/cip_protocol/llm/response.py) — pattern matching, regex policies, escalation triggers |
-| How does it pick the right reasoning strategy? | [Scaffold engine](src/cip_protocol/scaffold/engine.py) selects by tool name, intent signals, and keyword scoring |
-| How do I enforce disclaimers? | Automatic — missing disclaimers are appended, violations are redacted |
+| How does the LLM know what role to play? | [Scaffold YAMLs](#scaffolds) define role, perspective, tone, and reasoning steps — the LLM follows these as a reasoning framework, not a rulebook |
+| How do I catch genuine mistakes before they reach the user? | [Safety boundaries](src/cip_protocol/llm/response.py) — pattern matching, regex policies, escalation triggers that intervene only when output crosses a real line |
+| How does it pick the right reasoning strategy? | [Scaffold engine](src/cip_protocol/scaffold/engine.py) — layered selection across micro/meso/macro/meta signals, with all parameters tunable per-request via [`SelectionParams`](src/cip_protocol/scaffold/matcher.py) |
+| How do disclaimers work? | Missing disclaimers are appended automatically — the LLM focuses on reasoning, the framework handles the boilerplate |
 | How do I switch domains? | Swap the [`DomainConfig`](src/cip_protocol/domain.py) — same protocol, different domain |
-| How do I change behavior without editing config? | [`RunPolicy`](src/cip_protocol/control.py) — per-request overlay for temperature, format, guardrail toggles |
+| How do I change behavior without editing config? | [`RunPolicy`](src/cip_protocol/control.py) — per-request overlay for temperature, format, and safety toggles |
 
 ## Getting started
 
@@ -92,7 +92,7 @@ cip = CIP.from_config(config, "scaffolds/", "anthropic", api_key="sk-...")
 result = await cip.run("where is my money going?", data_context=spending_data)
 ```
 
-The facade handles scaffold loading, selection, prompt assembly, LLM invocation, and guardrail enforcement in one call. `result` includes the response, which scaffold was selected, how it was selected, and the scores.
+The facade handles scaffold loading, selection, prompt assembly, LLM invocation, and safety checks in one call. `result` includes the response, which scaffold was selected, how it was selected, and the scores.
 
 Same structure, different domain:
 
@@ -208,7 +208,7 @@ response = await llm.invoke(prompt, scaffold, data_context=data, policy=policy)
 
 ## Scaffolds
 
-Scaffolds externalize prompt engineering as YAML. Each file defines how the inner LLM reasons about a specific type of request — role, reasoning steps, output constraints, and guardrails:
+Scaffolds externalize prompt engineering as YAML. Each file defines a reasoning framework for a specific type of request — the role, perspective, reasoning steps, output shape, and safety boundaries. The LLM uses these as structure for its thinking, not as rigid constraints:
 
 ```yaml
 id: symptom_overview
@@ -245,21 +245,21 @@ guardrails:
   prohibited_actions: [Diagnosing medical conditions, Recommending specific medications]
 ```
 
-The [scaffold engine](src/cip_protocol/scaffold/engine.py) selects scaffolds using a priority cascade: **explicit ID** > **tool name match** > **intent signal + keyword scoring**. See [`matcher.py`](src/cip_protocol/scaffold/matcher.py) for the scoring algorithm.
+The [scaffold engine](src/cip_protocol/scaffold/engine.py) selects scaffolds using a priority cascade: **explicit ID** > **tool name match** > **layered scoring** (micro/meso/macro/meta signal layers with saturation and cross-layer reinforcement). All scoring parameters are tunable per-request via [`SelectionParams`](src/cip_protocol/scaffold/matcher.py) — the calling LLM decides how selection behaves, not hardcoded constants.
 
 Generate a JSON schema for IDE validation and autocomplete: `make schema` → [`docs/scaffold.schema.json`](docs/scaffold.schema.json)
 
-## Control cockpit
+## Runtime policy
 
-[`RunPolicy`](src/cip_protocol/control.py) is a per-request behavior overlay. It flows through the entire pipeline without modifying your `DomainConfig` or scaffold YAML:
+[`RunPolicy`](src/cip_protocol/control.py) is a per-request behavior overlay. It flows through the entire pipeline without modifying your `DomainConfig` or scaffold YAML — think of it as the LLM (or caller) expressing preferences, not a control panel:
 
-| What it controls | How |
+| What it adjusts | How |
 |---|---|
 | LLM temperature and max tokens | `policy.temperature`, `policy.max_tokens` |
 | Output format and length | `policy.output_format`, `policy.max_length_guidance` |
 | Tone variant | `policy.tone_variant` (selects from scaffold's `tone_variants`) |
-| Disclaimer enforcement | `policy.skip_disclaimers` suppresses auto-appended disclaimers |
-| Prohibited actions | `policy.remove_prohibited_actions` (use `["*"]` to clear all) |
+| Disclaimers | `policy.skip_disclaimers` suppresses auto-appended disclaimers |
+| Safety boundaries | `policy.remove_prohibited_actions` (use `["*"]` to clear all) |
 | Must/never include lists | `policy.extra_must_include`, `policy.extra_never_include` |
 | Scaffold selection weighting | `policy.scaffold_selection_bias` — per-scaffold score multipliers |
 | Prompt compression | `policy.compact` — strip headers, collapse bullets, inline JSON |
@@ -339,16 +339,16 @@ Unrecognized clauses are returned in `result.unrecognized` — nothing is silent
 </details>
 
 <details>
-<summary>Streaming with incremental guardrails</summary>
+<summary>Streaming with incremental safety checks</summary>
 
-Guardrails run on every chunk as it arrives. If a violation is detected mid-stream, the client halts immediately and returns sanitized content:
+Safety checks run on every chunk as it arrives. If a boundary is crossed mid-stream, the client halts and returns sanitized content:
 
 ```python
 async for event in llm.invoke_stream(prompt, scaffold, data_context=data):
     if event.event == "chunk":
         print(event.text, end="")
     elif event.event == "halted":
-        # guardrail violation mid-stream — content sanitized
+        # boundary crossed mid-stream — content sanitized
         final = event.response
     elif event.event == "final":
         final = event.response
@@ -361,7 +361,7 @@ See [`InnerLLMClient.invoke_stream`](src/cip_protocol/llm/client.py) for the ful
 <details>
 <summary>Telemetry</summary>
 
-Structured events are emitted for scaffold selection, LLM latency, token usage, guardrail interventions, and policy sources. Plug in any sink that implements the [`TelemetrySink`](src/cip_protocol/telemetry.py) protocol:
+Structured events are emitted for scaffold selection, LLM latency, token usage, safety interventions, and policy sources. Plug in any sink that implements the [`TelemetrySink`](src/cip_protocol/telemetry.py) protocol:
 
 ```python
 from cip_protocol import LoggerTelemetrySink
@@ -376,9 +376,9 @@ llm = InnerLLMClient(provider, config=config, telemetry_sink=LoggerTelemetrySink
 <summary>Performance tuning</summary>
 
 - **Compact mode** — `policy.compact = True` or `compact mode` in constraint parser. Strips markdown headers, collapses bullets, inlines JSON. Reduces prompt size for cost/speed.
-- **Async guardrails** — `check_guardrails_async` runs evaluators concurrently.
+- **Async safety checks** — `check_guardrails_async` runs evaluators concurrently.
 - **Matcher cache** — `prepare_matcher_cache(registry)` pre-compiles all scaffold token patterns. Called automatically on `load_scaffold_directory`.
-- **google-re2** — `pip install cip-protocol[re2]` for linear-time regex in guardrail evaluation. Falls back to stdlib `re` if unavailable.
+- **google-re2** — `pip install cip-protocol[re2]` for linear-time regex in safety evaluation. Falls back to stdlib `re` if unavailable.
 - **CIP_PERF_MODE=1** — relaxes Pydantic validation for production throughput.
 
 </details>
@@ -400,7 +400,7 @@ src/cip_protocol/
 │   ├── models.py          # Pydantic models (Scaffold, AssembledPrompt)
 │   ├── registry.py        # In-memory scaffold index (by id/tool/tag)
 │   ├── loader.py          # YAML → Scaffold deserialization
-│   ├── matcher.py         # Multi-criteria selection + explainability
+│   ├── matcher.py         # Layered selection (micro/meso/macro/meta) + explainability
 │   ├── renderer.py        # Scaffold → two-part LLM prompt assembly
 │   ├── engine.py          # select() + select_explained() + apply()
 │   └── validator.py       # Scaffold YAML validation
@@ -408,7 +408,7 @@ src/cip_protocol/
     ├── provider.py        # LLMProvider protocol + factory
     ├── providers/         # Anthropic, OpenAI, mock implementations
     ├── client.py          # InnerLLMClient (invoke + invoke_stream)
-    └── response.py        # Pluggable guardrail evaluators + sanitization
+    └── response.py        # Pluggable safety evaluators + sanitization
 ```
 
 </details>
@@ -417,7 +417,7 @@ src/cip_protocol/
 
 ```sh
 pip install -e ".[dev]"
-make test      # 242 tests
+make test      # 292 tests
 make lint      # ruff
 make schema    # regenerate scaffold JSON schema
 ```
