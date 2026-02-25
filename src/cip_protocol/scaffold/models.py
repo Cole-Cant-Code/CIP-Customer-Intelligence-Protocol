@@ -98,6 +98,18 @@ class ContextField(_StrictModel):
         return value.strip()
 
 
+class DataRequirement(_StrictModel):
+    """A scaffold's declaration that it needs data from a specific source."""
+
+    source_id: str
+    required: bool = False
+
+    @field_validator("source_id")
+    @classmethod
+    def normalize_source_id(cls, value: str) -> str:
+        return value.strip()
+
+
 class Scaffold(_StrictModel):
     id: str
     version: str
@@ -112,6 +124,7 @@ class Scaffold(_StrictModel):
     guardrails: ScaffoldGuardrails
     context_accepts: list[ContextField] = Field(default_factory=list)
     context_exports: list[ContextField] = Field(default_factory=list)
+    data_requirements: list[DataRequirement] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
 
     @field_validator("id", "version", "domain", "display_name", "description")

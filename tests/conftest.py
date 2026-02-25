@@ -7,6 +7,7 @@ import pytest
 from cip_protocol import DomainConfig
 from cip_protocol.scaffold.matcher import clear_matcher_cache
 from cip_protocol.scaffold.models import (
+    DataRequirement,
     Scaffold,
     ScaffoldApplicability,
     ScaffoldFraming,
@@ -32,6 +33,7 @@ def make_test_scaffold(
     disclaimers: list[str] | None = None,
     prohibited_actions: list[str] | None = None,
     escalation_triggers: list[str] | None = None,
+    data_requirements: list[DataRequirement] | None = None,
 ) -> Scaffold:
     """Create a minimal scaffold for testing."""
     return Scaffold(
@@ -62,6 +64,7 @@ def make_test_scaffold(
             escalation_triggers=escalation_triggers or [],
             prohibited_actions=prohibited_actions or [],
         ),
+        data_requirements=data_requirements or [],
     )
 
 

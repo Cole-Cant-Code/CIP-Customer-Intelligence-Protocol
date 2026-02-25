@@ -11,6 +11,7 @@ import yaml
 from cip_protocol.scaffold.matcher import prepare_matcher_cache
 from cip_protocol.scaffold.models import (
     ContextField,
+    DataRequirement,
     Scaffold,
     ScaffoldApplicability,
     ScaffoldFraming,
@@ -71,6 +72,14 @@ def load_scaffold_file(path: Path) -> Scaffold:
             for c in data.get(key, [])
         ]
 
+    data_reqs = [
+        DataRequirement(
+            source_id=dr.get("source_id", ""),
+            required=dr.get("required", False),
+        )
+        for dr in data.get("data_requirements", [])
+    ]
+
     return Scaffold(
         id=data["id"],
         version=data["version"],
@@ -104,5 +113,6 @@ def load_scaffold_file(path: Path) -> Scaffold:
         ),
         context_accepts=_context_fields("context_accepts"),
         context_exports=_context_fields("context_exports"),
+        data_requirements=data_reqs,
         tags=data.get("tags", []),
     )
