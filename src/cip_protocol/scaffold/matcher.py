@@ -142,7 +142,7 @@ _token_to_scaffold_ids: dict[str, set[str]] = {}
 
 
 def _compile_phrase_pattern(phrase: str) -> re.Pattern[str]:
-    return re.compile(rf"(?<!\w){re.escape(phrase.lower())}(?!\w)")
+    return re.compile(rf"\b{re.escape(phrase.lower())}\b")
 
 
 def _normalize_phrase(phrase: str) -> str:

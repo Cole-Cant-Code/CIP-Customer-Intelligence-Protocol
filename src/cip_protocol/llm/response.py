@@ -71,7 +71,7 @@ class GuardrailEvaluator(Protocol):
 @functools.lru_cache(maxsize=256)
 def _compile_indicator_pattern(normalized: str) -> re.Pattern[str]:
     escaped = re.escape(normalized).replace(r"\ ", r"\s+")
-    return _compile(rf"(?<!\w){escaped}(?!\w)")
+    return _compile(rf"\b{escaped}\b")
 
 
 @functools.lru_cache(maxsize=256)
@@ -79,7 +79,7 @@ def _compile_redaction_pattern(phrase: str) -> re.Pattern[str]:
     truncated = phrase[:500] if len(phrase) > 500 else phrase
     escaped = re.escape(truncated).replace(r"\ ", r"\s+")
     return _compile(
-        r"[^.!?\n]{0,500}(?<!\w)" + escaped + r"(?!\w)[^.!?\n]{0,500}[.!?]?",
+        r"[^.!?\n]{0,500}\b" + escaped + r"\b[^.!?\n]{0,500}[.!?]?",
         re.IGNORECASE,
     )
 
