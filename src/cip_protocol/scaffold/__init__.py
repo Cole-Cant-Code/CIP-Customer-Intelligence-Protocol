@@ -1,5 +1,6 @@
 from cip_protocol.scaffold.engine import ScaffoldEngine, ScaffoldNotFoundError
 from cip_protocol.scaffold.loader import load_scaffold_directory, load_scaffold_file
+from cip_protocol.scaffold.matcher import ScaffoldScore, SelectionExplanation
 from cip_protocol.scaffold.models import AssembledPrompt, ChatMessage, Scaffold
 from cip_protocol.scaffold.registry import ScaffoldRegistry
 from cip_protocol.scaffold.validator import (
@@ -14,6 +15,8 @@ __all__ = [
     "ScaffoldEngine",
     "ScaffoldNotFoundError",
     "ScaffoldRegistry",
+    "ScaffoldScore",
+    "SelectionExplanation",
     "load_scaffold_directory",
     "load_scaffold_file",
     "validate_scaffold_directory",

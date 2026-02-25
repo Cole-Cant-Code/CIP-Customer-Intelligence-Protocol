@@ -6,7 +6,11 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from cip_protocol.domain import DomainConfig
-from cip_protocol.scaffold.matcher import match_scaffold
+from cip_protocol.scaffold.matcher import (
+    SelectionExplanation,
+    match_scaffold,
+    score_scaffolds_explained,
+)
 from cip_protocol.scaffold.models import AssembledPrompt, ChatMessage, Scaffold
 from cip_protocol.scaffold.registry import ScaffoldRegistry
 from cip_protocol.scaffold.renderer import render_scaffold
@@ -74,6 +78,116 @@ class ScaffoldEngine:
                     },
                 ))
                 return default
+
+        raise ScaffoldNotFoundError(
+            f"No scaffold found for tool='{tool_name}', "
+            f"input='{user_input[:50]}', "
+            f"and no default scaffold configured"
+        )
+
+    def select_explained(
+        self,
+        tool_name: str,
+        user_input: str = "",
+        caller_scaffold_id: str | None = None,
+        policy: RunPolicy | None = None,
+    ) -> tuple[Scaffold, SelectionExplanation]:
+        """Like select(), but returns (scaffold, explanation) with selection metadata."""
+        bias = policy.scaffold_selection_bias if policy else None
+
+        # Priority 1: explicit caller_scaffold_id
+        if caller_scaffold_id:
+            scaffold = self.registry.get(caller_scaffold_id)
+            if scaffold:
+                explanation = SelectionExplanation(
+                    selected_scaffold_id=scaffold.id,
+                    selection_mode="caller_id",
+                    tool_name=tool_name,
+                    user_input=user_input,
+                )
+                self.telemetry.emit(TelemetryEvent(
+                    name="scaffold.select",
+                    attributes={
+                        "tool_name": tool_name,
+                        "selected_scaffold_id": scaffold.id,
+                        "selection_mode": "caller_id",
+                    },
+                ))
+                return scaffold, explanation
+
+        # Priority 2: tool name match
+        tool_matches = self.registry.find_by_tool(tool_name)
+        if tool_matches:
+            scaffold = tool_matches[0]
+            explanation = SelectionExplanation(
+                selected_scaffold_id=scaffold.id,
+                selection_mode="tool_match",
+                tool_name=tool_name,
+                user_input=user_input,
+            )
+            self.telemetry.emit(TelemetryEvent(
+                name="scaffold.select",
+                attributes={
+                    "tool_name": tool_name,
+                    "selected_scaffold_id": scaffold.id,
+                    "selection_mode": "tool_match",
+                },
+            ))
+            return scaffold, explanation
+
+        # Priority 3: scored matching
+        if user_input:
+            scores = score_scaffolds_explained(
+                self.registry.all(), user_input, selection_bias=bias,
+            )
+            best = max(scores, key=lambda s: s.total_score) if scores else None
+            if best and best.total_score > 0:
+                scaffold = self.registry.get(best.scaffold_id)
+                if scaffold:
+                    explanation = SelectionExplanation(
+                        selected_scaffold_id=scaffold.id,
+                        selection_mode="scored",
+                        scores=scores,
+                        tool_name=tool_name,
+                        user_input=user_input,
+                    )
+                    self.telemetry.emit(TelemetryEvent(
+                        name="scaffold.select",
+                        attributes={
+                            "tool_name": tool_name,
+                            "selected_scaffold_id": scaffold.id,
+                            "selection_mode": "scored",
+                        },
+                    ))
+                    return scaffold, explanation
+
+        # Priority 4: domain default
+        default_id = self.config.default_scaffold_id if self.config else None
+        if default_id:
+            default = self.registry.get(default_id)
+            if default:
+                # Still compute scores for explanation if user_input given
+                scores = []
+                if user_input:
+                    scores = score_scaffolds_explained(
+                        self.registry.all(), user_input, selection_bias=bias,
+                    )
+                explanation = SelectionExplanation(
+                    selected_scaffold_id=default.id,
+                    selection_mode="default",
+                    scores=scores,
+                    tool_name=tool_name,
+                    user_input=user_input,
+                )
+                self.telemetry.emit(TelemetryEvent(
+                    name="scaffold.select",
+                    attributes={
+                        "tool_name": tool_name,
+                        "selected_scaffold_id": default.id,
+                        "selection_mode": "default",
+                    },
+                ))
+                return default, explanation
 
         raise ScaffoldNotFoundError(
             f"No scaffold found for tool='{tool_name}', "

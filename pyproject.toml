@@ -26,6 +26,9 @@ dev = [
     "ruff>=0.8",
 ]
 
+[project.scripts]
+cip = "cip_protocol.__main__:main"
+
 [tool.hatch.build.targets.sdist]
 include = ["src/cip_protocol"]
 

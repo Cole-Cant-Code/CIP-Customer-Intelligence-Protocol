@@ -108,6 +108,80 @@ def match_scaffold(
     return None
 
 
+@dataclass
+class ScaffoldScore:
+    scaffold_id: str
+    total_score: float
+    intent_signal_scores: dict[str, float] = field(default_factory=dict)
+    keyword_scores: dict[str, float] = field(default_factory=dict)
+    bias_multiplier: float = 1.0
+    pre_bias_score: float = 0.0
+
+
+@dataclass
+class SelectionExplanation:
+    selected_scaffold_id: str | None
+    selection_mode: str  # "caller_id", "tool_match", "scored", "default"
+    scores: list[ScaffoldScore] = field(default_factory=list)
+    tool_name: str = ""
+    user_input: str = ""
+
+
+def score_scaffolds_explained(
+    scaffolds: list[Scaffold],
+    user_input: str,
+    selection_bias: dict[str, float] | None = None,
+) -> list[ScaffoldScore]:
+    """Score all scaffolds with per-scaffold breakdown."""
+    user_lower = user_input.lower()
+    user_tokens = _tokenize(user_input)
+    results: list[ScaffoldScore] = []
+
+    for scaffold in scaffolds:
+        cache = _ensure_cached(scaffold)
+        intent_scores: dict[str, float] = {}
+        keyword_scores: dict[str, float] = {}
+        score = 0.0
+
+        for signal in scaffold.applicability.intent_signals:
+            signal_tokens = cache.signal_tokens.get(signal, set())
+            if not signal_tokens:
+                continue
+            coverage = sum(1 for t in signal_tokens if t in user_tokens) / len(signal_tokens)
+            signal_score = 0.0
+            if coverage >= MIN_SIGNAL_COVERAGE:
+                signal_score += INTENT_WEIGHT * coverage
+            pat = cache.signal_patterns.get(signal)
+            if pat and pat.search(user_lower):
+                signal_score += EXACT_SIGNAL_BONUS
+            if signal_score > 0:
+                intent_scores[signal] = signal_score
+                score += signal_score
+
+        for kw in scaffold.applicability.keywords:
+            pat = cache.keyword_patterns.get(kw)
+            if pat and pat.search(user_lower):
+                keyword_scores[kw] = KEYWORD_WEIGHT
+                score += KEYWORD_WEIGHT
+
+        pre_bias = score
+        multiplier = 1.0
+        if selection_bias:
+            multiplier = selection_bias.get(scaffold.id, 1.0)
+            score *= multiplier
+
+        results.append(ScaffoldScore(
+            scaffold_id=scaffold.id,
+            total_score=score,
+            intent_signal_scores=intent_scores,
+            keyword_scores=keyword_scores,
+            bias_multiplier=multiplier,
+            pre_bias_score=pre_bias,
+        ))
+
+    return results
+
+
 def _score_scaffolds(
     scaffolds: list[Scaffold],
     user_input: str,
