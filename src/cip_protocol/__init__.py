@@ -113,4 +113,4 @@ __all__ = [
     "run_tool_with_orchestration",
     "score_lead_with_layers",
 ]
-__version__ = "0.3.0"
+__version__ = "0.3.1"
