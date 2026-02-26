@@ -54,11 +54,14 @@ def validate_scaffold_file(
         errors.append(f"{dp}: Version '{scaffold.version}' doesn't look like a version number")
 
     name = path.name
-    if not (name == f"{scaffold.id}.yaml" or name.startswith(f"{scaffold.id}.")):
-        errors.append(
-            f"{dp}: Filename '{name}' should match scaffold id "
-            f"'{scaffold.id}' (expected '{scaffold.id}.*.yaml')"
-        )
+    # Underscore-prefixed files are treated as reference/draft scaffolds by the
+    # loader and are intentionally excluded from strict filename-ID matching.
+    if not name.startswith("_"):
+        if not (name == f"{scaffold.id}.yaml" or name.startswith(f"{scaffold.id}.")):
+            errors.append(
+                f"{dp}: Filename '{name}' should match scaffold id "
+                f"'{scaffold.id}' (expected '{scaffold.id}.*.yaml')"
+            )
 
     return scaffold, errors
 
@@ -98,5 +101,4 @@ def validate_scaffold_directory(
             seen_ids[scaffold.id] = path
 
     return loaded, errors
-
 

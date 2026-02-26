@@ -97,6 +97,62 @@ guardrails:
     assert scaffold.output_calibration.format_options == ["bullet_points"]
 
 
+def test_validator_skips_filename_match_for_underscore_prefixed_files(tmp_path: Path) -> None:
+    path = _write_yaml(
+        tmp_path / "_reference_scaffold.yaml",
+        """
+id: some_other_id
+version: "1.0"
+domain: test
+display_name: Reference Scaffold
+description: intentionally filename-id mismatched reference scaffold
+applicability:
+  tools: [analyze]
+framing:
+  role: Analyst
+  perspective: Grounded
+  tone: neutral
+reasoning_framework:
+  steps: [step one]
+output_calibration:
+  format: structured_narrative
+guardrails:
+  disclaimers: [Not professional advice.]
+""".strip(),
+    )
+
+    _, errors = validate_scaffold_file(path)
+    assert not any("should match scaffold id" in err for err in errors)
+
+
+def test_validator_enforces_filename_match_for_non_underscore_files(tmp_path: Path) -> None:
+    path = _write_yaml(
+        tmp_path / "mismatch.yaml",
+        """
+id: different_id
+version: "1.0"
+domain: test
+display_name: Mismatch
+description: non-reference file should enforce filename-id match
+applicability:
+  tools: [analyze]
+framing:
+  role: Analyst
+  perspective: Grounded
+  tone: neutral
+reasoning_framework:
+  steps: [step one]
+output_calibration:
+  format: structured_narrative
+guardrails:
+  disclaimers: [Not professional advice.]
+""".strip(),
+    )
+
+    _, errors = validate_scaffold_file(path)
+    assert any("should match scaffold id" in err for err in errors)
+
+
 VALID_SCAFFOLD_YAML = """\
 id: {id}
 version: "1.0"
