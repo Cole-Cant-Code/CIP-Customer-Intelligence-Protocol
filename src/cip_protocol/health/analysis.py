@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Sequence
 
 from cip_protocol.health.scoring import LAYER_NAMES, score_scaffold_layers
+from cip_protocol.mantic_adapter import Backend, detect as adapter_detect
 from cip_protocol.scaffold.models import Scaffold
 
 # ---------------------------------------------------------------------------
@@ -163,6 +164,103 @@ def analyze_portfolio(
             detection_threshold=detection_threshold,
             tension_threshold=tension_threshold,
             coherence_divisor=coherence_divisor,
+        )
+        for s in scaffolds
+    ]
+    coupling = _cross_scaffold_coupling(results) if len(results) > 1 else []
+    avg_coherence = (
+        sum(r.coherence for r in results) / len(results) if results else 0.0
+    )
+    signals = {r.signal for r in results}
+    if signals == {"emergence_window"}:
+        portfolio_signal = "portfolio_emergence"
+    elif signals == {"friction_detected"}:
+        portfolio_signal = "portfolio_friction"
+    elif len(signals) > 1:
+        portfolio_signal = "portfolio_mixed"
+    elif signals == {"baseline"}:
+        portfolio_signal = "portfolio_baseline"
+    else:
+        portfolio_signal = "portfolio_empty"
+
+    return PortfolioHealthResult(
+        scaffolds=results,
+        coupling=coupling,
+        avg_coherence=round(avg_coherence, 3),
+        portfolio_signal=portfolio_signal,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Backend-aware variants (delegate to mantic_adapter)
+# ---------------------------------------------------------------------------
+
+_HEALTH_HIERARCHY = {
+    "micro": "Micro",
+    "meso": "Meso",
+    "macro": "Macro",
+    "meta": "Meta",
+}
+
+
+def analyze_scaffold_with_backend(
+    scaffold: Scaffold,
+    *,
+    backend: Backend = "auto",
+    detection_threshold: float = 0.4,
+    tension_threshold: float = 0.5,
+    coherence_divisor: float = 0.5,
+    domain_name: str = "cip_health",
+    layer_hierarchy: dict[str, str] | None = None,
+    temporal_config: dict[str, Any] | None = None,
+) -> ScaffoldHealthResult:
+    """Like :func:`analyze_scaffold` but routes through the mantic adapter."""
+    layers = score_scaffold_layers(scaffold)
+    result = adapter_detect(
+        layer_names=list(LAYER_NAMES),
+        layer_values=[layers[n] for n in LAYER_NAMES],
+        backend=backend,
+        mode="friction",
+        detection_threshold=detection_threshold,
+        tension_threshold=tension_threshold,
+        coherence_divisor=coherence_divisor,
+        domain_name=domain_name,
+        layer_hierarchy=layer_hierarchy or _HEALTH_HIERARCHY,
+        temporal_config=temporal_config,
+    )
+    return ScaffoldHealthResult(
+        scaffold_id=scaffold.id,
+        layers=layers,
+        m_score=result.m_score,
+        coherence=result.coherence,
+        dominant_layer=result.dominant_layer,
+        signal=result.signal,
+        tension_pairs=result.tension_pairs,
+    )
+
+
+def analyze_portfolio_with_backend(
+    scaffolds: Sequence[Scaffold],
+    *,
+    backend: Backend = "auto",
+    detection_threshold: float = 0.4,
+    tension_threshold: float = 0.5,
+    coherence_divisor: float = 0.5,
+    domain_name: str = "cip_health",
+    layer_hierarchy: dict[str, str] | None = None,
+    temporal_config: dict[str, Any] | None = None,
+) -> PortfolioHealthResult:
+    """Like :func:`analyze_portfolio` but routes through the mantic adapter."""
+    results = [
+        analyze_scaffold_with_backend(
+            s,
+            backend=backend,
+            detection_threshold=detection_threshold,
+            tension_threshold=tension_threshold,
+            coherence_divisor=coherence_divisor,
+            domain_name=domain_name,
+            layer_hierarchy=layer_hierarchy,
+            temporal_config=temporal_config,
         )
         for s in scaffolds
     ]

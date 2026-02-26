@@ -6,7 +6,10 @@ import sys
 from argparse import Namespace
 from pathlib import Path
 
-from cip_protocol.health.analysis import analyze_portfolio
+from cip_protocol.health.analysis import (
+    analyze_portfolio,
+    analyze_portfolio_with_backend,
+)
 from cip_protocol.health.report import format_json, format_table
 from cip_protocol.scaffold.loader import load_scaffold_file
 
@@ -30,12 +33,23 @@ def run_scaffold_health(args: Namespace) -> None:
         print("No scaffolds loaded.", file=sys.stderr)
         sys.exit(1)
 
-    result = analyze_portfolio(
-        scaffolds,
-        detection_threshold=args.detection_threshold,
-        tension_threshold=args.tension_threshold,
-        coherence_divisor=args.coherence_divisor,
-    )
+    backend = getattr(args, "backend", "auto")
+
+    if backend == "auto" or backend == "cip_native" or backend == "mantic":
+        result = analyze_portfolio_with_backend(
+            scaffolds,
+            backend=backend,
+            detection_threshold=args.detection_threshold,
+            tension_threshold=args.tension_threshold,
+            coherence_divisor=args.coherence_divisor,
+        )
+    else:
+        result = analyze_portfolio(
+            scaffolds,
+            detection_threshold=args.detection_threshold,
+            tension_threshold=args.tension_threshold,
+            coherence_divisor=args.coherence_divisor,
+        )
 
     if args.json:
         print(format_json(result))

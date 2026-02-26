@@ -20,6 +20,11 @@ from cip_protocol.engagement.scoring import (
     lead_score_band,
     recency_multiplier,
 )
+from cip_protocol.engagement.layered_scoring import (
+    LayerMapping,
+    LayeredScoreResult,
+    score_lead_with_layers,
+)
 from cip_protocol.engagement.store import EscalationStore
 
 __all__ = [
@@ -27,6 +32,8 @@ __all__ = [
     "EscalationConfig",
     "EscalationDetector",
     "EscalationStore",
+    "LayerMapping",
+    "LayeredScoreResult",
     "LeadEvent",
     "LeadScoringConfig",
     "check_escalation",
@@ -38,4 +45,5 @@ __all__ = [
     "parse_int",
     "parse_price",
     "recency_multiplier",
+    "score_lead_with_layers",
 ]

@@ -20,11 +20,18 @@ from cip_protocol.data import (
     ValidationResult,
 )
 from cip_protocol.domain import DomainConfig
+from cip_protocol.mantic_adapter import (
+    Backend,
+    DetectionResult,
+    get_backend,
+)
 from cip_protocol.engagement import (
     EscalationCallback,
     EscalationConfig,
     EscalationDetector,
     EscalationStore,
+    LayerMapping,
+    LayeredScoreResult,
     LeadEvent,
     LeadScoringConfig,
     check_escalation,
@@ -36,6 +43,7 @@ from cip_protocol.engagement import (
     parse_int,
     parse_price,
     recency_multiplier,
+    score_lead_with_layers,
 )
 from cip_protocol.orchestration import (
     ProviderPool,
@@ -53,6 +61,7 @@ from cip_protocol.telemetry import (
 )
 
 __all__ = [
+    "Backend",
     "CIP",
     "CIPResult",
     "ConstraintParser",
@@ -66,12 +75,15 @@ __all__ = [
     "DataSource",
     "DataSourceRegistry",
     "DataSourceSpec",
+    "DetectionResult",
     "DomainConfig",
     "EscalationCallback",
     "EscalationConfig",
     "EscalationDetector",
     "EscalationStore",
     "InMemoryTelemetrySink",
+    "LayerMapping",
+    "LayeredScoreResult",
     "LeadEvent",
     "LeadScoringConfig",
     "LoggerTelemetrySink",
@@ -90,6 +102,7 @@ __all__ = [
     "check_escalation",
     "clean_numeric_string",
     "compute_lead_score",
+    "get_backend",
     "infer_lead_status",
     "lead_score_band",
     "log_and_return_tool_error",
@@ -98,5 +111,6 @@ __all__ = [
     "parse_price",
     "recency_multiplier",
     "run_tool_with_orchestration",
+    "score_lead_with_layers",
 ]
-__version__ = "0.2.0"
+__version__ = "0.3.0"

@@ -27,6 +27,12 @@ def main(argv: list[str] | None = None) -> None:
     sh.add_argument("--detection-threshold", type=float, default=0.4)
     sh.add_argument("--tension-threshold", type=float, default=0.5)
     sh.add_argument("--coherence-divisor", type=float, default=0.5)
+    sh.add_argument(
+        "--backend",
+        choices=["auto", "cip_native", "mantic"],
+        default="auto",
+        help="Detection backend (default: auto)",
+    )
 
     args = parser.parse_args(argv)
 

@@ -19,6 +19,8 @@ print(result.response.content)
 result = await cip.run("same but shorter", policy="be concise, bullet points")
 ```
 
+> **Reasoning protocol; consumes mantic via optional adapter.** CIP owns domain reasoning, scaffold selection, and engagement scoring. Multi-signal detection math is delegated to mantic when installed, with a built-in native fallback.
+
 ---
 
 ## What is this?
@@ -56,7 +58,7 @@ User query → MCP Tool → Select → Render → Invoke → Safety → Response
 ## Getting started
 
 ```sh
-pip install -e ".[all]"   # core + Anthropic + OpenAI + re2
+pip install -e ".[all]"   # core + Anthropic + OpenAI + re2 + mantic-thinking
 ```
 
 <details>
@@ -67,6 +69,7 @@ pip install -e "."              # core only (mock provider)
 pip install -e ".[anthropic]"   # + Claude
 pip install -e ".[openai]"      # + OpenAI
 pip install -e ".[re2]"         # + ReDoS-safe regex via google-re2
+pip install -e ".[mantic]"      # + mantic-thinking backend
 pip install -e ".[dev]"         # + pytest, ruff
 ```
 
@@ -420,6 +423,8 @@ pip install -e ".[dev]"
 make test      # 478 tests
 make lint      # ruff
 make schema    # regenerate scaffold JSON schema
+# Optional CI hard gate for mantic-enabled runs:
+CIP_REQUIRE_MANTIC=1 python scripts/check_mantic_runtime.py
 ```
 
 ## Reference implementation
