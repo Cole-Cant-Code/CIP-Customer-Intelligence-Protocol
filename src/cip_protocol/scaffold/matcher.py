@@ -483,11 +483,17 @@ def _score_scaffolds_layered(
         else:
             non_candidate_scaffolds.append(scaffold)
 
-    # Pass 2: macro fallback (only if fast path found nothing confident)
+    # Pass 2: macro fallback.
+    # Run when token-indexed candidate pruning found nothing, or when the
+    # top fast-path score is below an explicit confidence threshold.
     best_so_far = max((s.total_score for s in scores), default=0.0)
     conf_threshold = params.confidence()
+    no_candidates = not candidate_ids
+    should_macro_fallback = no_candidates or (
+        conf_threshold > 0 and best_so_far < conf_threshold
+    )
 
-    if conf_threshold > 0 and best_so_far < conf_threshold and non_candidate_scaffolds:
+    if should_macro_fallback and non_candidate_scaffolds:
         for scaffold in non_candidate_scaffolds:
             macro = _score_macro(scaffold, user_tokens, params)
             if macro > params.activation():

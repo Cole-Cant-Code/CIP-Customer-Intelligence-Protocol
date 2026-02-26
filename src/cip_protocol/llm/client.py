@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
     from cip_protocol.control import RunPolicy
 
 logger = logging.getLogger(__name__)
+_DEFAULT_REQUEST_TIMEOUT_SECONDS = 60.0
 
 
 @dataclass
@@ -51,17 +54,30 @@ class InnerLLMClient:
         config: DomainConfig | None = None,
         guardrail_evaluators: list[GuardrailEvaluator] | None = None,
         telemetry_sink: TelemetrySink | None = None,
+        request_timeout_seconds: float | None = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
     ) -> None:
+        if request_timeout_seconds is not None and request_timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds must be positive or None")
+
         self.provider = provider
         self.config = config
         self.guardrail_evaluators = guardrail_evaluators
         self.telemetry = telemetry_sink or NoOpTelemetrySink()
+        self.request_timeout_seconds = request_timeout_seconds
         if guardrail_evaluators is not None:
             self._resolved_evaluators = guardrail_evaluators
         else:
             prohibited = self.config.prohibited_indicators if self.config else None
             regex = self.config.regex_guardrail_policies if self.config else None
             self._resolved_evaluators = default_guardrail_evaluators(prohibited, regex)
+
+    @asynccontextmanager
+    async def _deadline(self):
+        if self.request_timeout_seconds is None:
+            yield
+            return
+        async with asyncio.timeout(self.request_timeout_seconds):
+            yield
 
     def _build_system_prompt(self, scaffold_system_message: str) -> str:
         if not self.config or not self.config.system_prompt:
@@ -233,17 +249,30 @@ class InnerLLMClient:
             "temperature": temperature,
             "evaluator_count": len(evaluators),
         }
+        if self.request_timeout_seconds is not None:
+            emit_attrs["timeout_seconds"] = self.request_timeout_seconds
         if policy and policy.source:
             emit_attrs["policy_source"] = policy.source
         self._emit("llm.invoke.start", **emit_attrs)
 
-        resp: ProviderResponse = await self.provider.generate(
-            system_message=full_system,
-            user_message=assembled_prompt.user_message,
-            chat_history=history,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        try:
+            async with self._deadline():
+                resp: ProviderResponse = await self.provider.generate(
+                    system_message=full_system,
+                    user_message=assembled_prompt.user_message,
+                    chat_history=history,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+        except TimeoutError as exc:
+            self._emit(
+                "llm.invoke.timeout",
+                scaffold_id=scaffold.id,
+                timeout_seconds=self.request_timeout_seconds,
+            )
+            raise TimeoutError(
+                f"LLM invoke timed out after {self.request_timeout_seconds}s"
+            ) from exc
 
         content, flags, exports, _ = await self._postprocess_async(
             resp.content, scaffold, evaluators, data_context,
@@ -294,54 +323,78 @@ class InnerLLMClient:
             scaffold_id=scaffold.id,
             history_turns=len(history),
             evaluator_count=len(evaluators),
+            timeout_seconds=self.request_timeout_seconds,
         )
 
         collected: list[str] = []
-        async for chunk in self.provider.generate_stream(
-            system_message=full_system,
-            user_message=assembled_prompt.user_message,
-            chat_history=history,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        ):
-            if not chunk:
-                continue
+        try:
+            async with self._deadline():
+                async for chunk in self.provider.generate_stream(
+                    system_message=full_system,
+                    user_message=assembled_prompt.user_message,
+                    chat_history=history,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                ):
+                    if not chunk:
+                        continue
 
-            collected.append(chunk)
-            raw_content = "".join(collected)
+                    collected.append(chunk)
+                    raw_content = "".join(collected)
 
-            # Hot path optimization: run guardrail checks per chunk, defer
-            # expensive disclaimer/context/provenance processing until halt/final.
-            guardrail_check = await check_guardrails_async(
-                raw_content, scaffold, evaluators=evaluators
-            )
-            if not guardrail_check.passed:
-                content, flags, exports, _passed = self._finalize_postprocess(
-                    raw_content, scaffold, guardrail_check, data_context,
+                    # Hot path optimization: run guardrail checks per chunk, defer
+                    # expensive disclaimer/context/provenance processing until halt/final.
+                    guardrail_check = await check_guardrails_async(
+                        raw_content, scaffold, evaluators=evaluators
+                    )
+                    if not guardrail_check.passed:
+                        content, flags, exports, _passed = self._finalize_postprocess(
+                            raw_content, scaffold, guardrail_check, data_context,
+                            skip_disclaimers=skip_disclaimers,
+                        )
+                        self._emit(
+                            "llm.stream.halted",
+                            scaffold_id=scaffold.id,
+                            elapsed_ms=(time.monotonic() - started) * 1000,
+                        )
+                        yield StreamEvent(
+                            event="halted",
+                            text=content,
+                            response=self._build_response(
+                                content, scaffold, flags, exports,
+                                {"input_tokens": 0, "output_tokens": 0},
+                            ),
+                        )
+                        return
+
+                    yield StreamEvent(event="chunk", text=chunk)
+
+                # Final pass on complete content
+                content, flags, exports, _ = await self._postprocess_async(
+                    "".join(collected).strip(), scaffold, evaluators, data_context,
                     skip_disclaimers=skip_disclaimers,
                 )
-                self._emit(
-                    "llm.stream.halted",
-                    scaffold_id=scaffold.id,
-                    elapsed_ms=(time.monotonic() - started) * 1000,
-                )
-                yield StreamEvent(
-                    event="halted",
-                    text=content,
-                    response=self._build_response(
-                        content, scaffold, flags, exports,
-                        {"input_tokens": 0, "output_tokens": 0},
-                    ),
-                )
-                return
-
-            yield StreamEvent(event="chunk", text=chunk)
-
-        # Final pass on complete content
-        content, flags, exports, _ = await self._postprocess_async(
-            "".join(collected).strip(), scaffold, evaluators, data_context,
-            skip_disclaimers=skip_disclaimers,
-        )
+        except TimeoutError:
+            timeout_content = "Response generation timed out before completion."
+            timeout_flags = ["timeout: generation_deadline_exceeded"]
+            self._emit(
+                "llm.stream.timeout",
+                scaffold_id=scaffold.id,
+                elapsed_ms=(time.monotonic() - started) * 1000,
+                timeout_seconds=self.request_timeout_seconds,
+            )
+            yield StreamEvent(
+                event="halted",
+                text=timeout_content,
+                response=self._build_response(
+                    timeout_content,
+                    scaffold,
+                    timeout_flags,
+                    {},
+                    {"input_tokens": 0, "output_tokens": 0},
+                ),
+            )
+            return
 
         self._emit(
             "llm.stream.complete",

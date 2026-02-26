@@ -4,11 +4,15 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from cip_protocol.llm.provider import ProviderResponse
+from cip_protocol.llm.provider import DEFAULT_PROVIDER_MODELS, ProviderResponse
 
 
 class AnthropicProvider:
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = DEFAULT_PROVIDER_MODELS["anthropic"],
+    ) -> None:
         import anthropic
 
         self.client = anthropic.AsyncAnthropic(api_key=api_key)

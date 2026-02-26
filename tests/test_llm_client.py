@@ -1,10 +1,14 @@
 """Tests for the InnerLLMClient and guardrail pipeline."""
 
 
+import asyncio
+from collections.abc import AsyncIterator
+
 import pytest
 from conftest import make_test_config, make_test_scaffold
 
 from cip_protocol.llm.client import InnerLLMClient
+from cip_protocol.llm.provider import ProviderResponse
 from cip_protocol.llm.providers.mock import MockProvider
 from cip_protocol.llm.response import (
     GuardrailEvaluation,
@@ -15,6 +19,43 @@ from cip_protocol.llm.response import (
 )
 from cip_protocol.scaffold.models import AssembledPrompt, ChatMessage
 from cip_protocol.telemetry import InMemoryTelemetrySink
+
+
+class SlowProvider:
+    def __init__(self, delay_seconds: float = 0.05) -> None:
+        self.delay_seconds = delay_seconds
+
+    async def generate(
+        self,
+        system_message: str,
+        user_message: str,
+        chat_history=None,
+        max_tokens: int = 2048,
+        temperature: float = 0.3,
+    ) -> ProviderResponse:
+        _ = system_message, user_message, chat_history, max_tokens, temperature
+        await asyncio.sleep(self.delay_seconds)
+        return ProviderResponse(
+            content="slow response",
+            input_tokens=1,
+            output_tokens=2,
+            model="slow-test-model",
+            latency_ms=self.delay_seconds * 1000,
+        )
+
+    async def generate_stream(
+        self,
+        system_message: str,
+        user_message: str,
+        chat_history=None,
+        max_tokens: int = 2048,
+        temperature: float = 0.3,
+    ) -> AsyncIterator[str]:
+        _ = system_message, user_message, chat_history, max_tokens, temperature
+        await asyncio.sleep(self.delay_seconds)
+        yield "slow "
+        await asyncio.sleep(self.delay_seconds)
+        yield "stream"
 
 
 class TestGuardrails:
@@ -76,6 +117,17 @@ class TestGuardrails:
         )
         assert any("escalation" in f for f in result.flags)
         # Escalation triggers are soft — they don't fail the check
+        assert result.passed
+
+    def test_escalation_trigger_detected_with_punctuation(self):
+        scaffold = make_test_scaffold(
+            escalation_triggers=["severe financial distress"]
+        )
+        result = check_guardrails(
+            "You appear to be in severe, financial distress.",
+            scaffold,
+        )
+        assert any("escalation" in f for f in result.flags)
         assert result.passed
 
     def test_escalation_trigger_no_substring_false_positive(self):
@@ -403,6 +455,50 @@ class TestInnerLLMClient:
         names = [event.name for event in sink.events]
         assert "llm.invoke.start" in names
         assert "llm.invoke.complete" in names
+
+    @pytest.mark.asyncio
+    async def test_invoke_timeout_raises(self):
+        sink = InMemoryTelemetrySink()
+        provider = SlowProvider(delay_seconds=0.05)
+        client = InnerLLMClient(
+            provider,
+            config=make_test_config(),
+            telemetry_sink=sink,
+            request_timeout_seconds=0.01,
+        )
+
+        scaffold = make_test_scaffold()
+        prompt = AssembledPrompt(system_message="Analyze.", user_message="Query.")
+        with pytest.raises(TimeoutError, match="timed out"):
+            await client.invoke(assembled_prompt=prompt, scaffold=scaffold)
+
+        names = [event.name for event in sink.events]
+        assert "llm.invoke.timeout" in names
+
+    @pytest.mark.asyncio
+    async def test_invoke_stream_timeout_yields_halted(self):
+        sink = InMemoryTelemetrySink()
+        provider = SlowProvider(delay_seconds=0.05)
+        client = InnerLLMClient(
+            provider,
+            config=make_test_config(),
+            telemetry_sink=sink,
+            request_timeout_seconds=0.01,
+        )
+
+        scaffold = make_test_scaffold()
+        prompt = AssembledPrompt(system_message="Analyze.", user_message="Query.")
+
+        events = []
+        async for event in client.invoke_stream(assembled_prompt=prompt, scaffold=scaffold):
+            events.append(event)
+
+        assert events
+        assert events[-1].event == "halted"
+        assert events[-1].response is not None
+        assert any("timeout" in flag for flag in events[-1].response.guardrail_flags)
+        names = [event.name for event in sink.events]
+        assert "llm.stream.timeout" in names
 
 
 class TestAsyncGuardrails:

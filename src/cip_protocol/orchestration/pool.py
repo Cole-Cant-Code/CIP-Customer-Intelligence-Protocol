@@ -6,6 +6,7 @@ import os
 
 from cip_protocol.cip import CIP
 from cip_protocol.domain import DomainConfig
+from cip_protocol.llm.provider import DEFAULT_PROVIDER_MODELS
 
 _DEFAULT_KEY_MAP: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
@@ -13,8 +14,8 @@ _DEFAULT_KEY_MAP: dict[str, str] = {
 }
 
 _DEFAULT_MODELS: dict[str, str] = {
-    "anthropic": "claude-sonnet-4-6",
-    "openai": "gpt-4o",
+    provider: DEFAULT_PROVIDER_MODELS[provider]
+    for provider in _DEFAULT_KEY_MAP
 }
 
 
@@ -86,7 +87,12 @@ class ProviderPool:
         return ""
 
     def _build(self, provider: str, model: str = "") -> CIP:
-        api_key = os.environ.get(self._key_map.get(provider, ""), "")
+        key_env = self._key_map.get(provider, "")
+        api_key = os.environ.get(key_env, "").strip() if key_env else ""
+        if provider != "mock" and key_env and not api_key:
+            raise ValueError(
+                f"Missing API key for provider '{provider}'. Set environment variable '{key_env}'."
+            )
         resolved_model = model or self._default_models.get(provider, "")
         return CIP.from_config(
             self._config,

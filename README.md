@@ -4,7 +4,7 @@ Structured reasoning frameworks and safety boundaries for consumer-facing MCP se
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Tests: 292](https://img.shields.io/badge/tests-292_passing-brightgreen.svg)](tests/)
+[![Tests: 478](https://img.shields.io/badge/tests-478_passing-brightgreen.svg)](tests/)
 
 ```python
 from cip_protocol import CIP, DomainConfig
@@ -417,7 +417,7 @@ src/cip_protocol/
 
 ```sh
 pip install -e ".[dev]"
-make test      # 292 tests
+make test      # 478 tests
 make lint      # ruff
 make schema    # regenerate scaffold JSON schema
 ```

@@ -6,6 +6,7 @@ import pytest
 from conftest import make_test_config, make_test_scaffold
 
 from cip_protocol.cip import CIP
+from cip_protocol.llm.provider import DEFAULT_PROVIDER_MODELS
 from cip_protocol.llm.providers.mock import MockProvider
 from cip_protocol.orchestration.pool import ProviderPool
 from cip_protocol.scaffold.registry import ScaffoldRegistry
@@ -110,6 +111,17 @@ class TestProviderResolution:
     def test_set_provider_unknown_returns_error(self, pool):
         msg = pool.set_provider("deepseek")
         assert "Unknown provider" in msg
+
+    def test_missing_api_key_fails_fast_for_non_mock(self, config, scaffold_dir, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        strict_pool = ProviderPool(
+            config,
+            scaffold_dir,
+            key_map={"openai": "OPENAI_API_KEY"},
+            default_models={"openai": DEFAULT_PROVIDER_MODELS["openai"]},
+        )
+        with pytest.raises(ValueError, match="Missing API key"):
+            strict_pool.get("openai")
 
 
 class TestPrepareOrchestration:

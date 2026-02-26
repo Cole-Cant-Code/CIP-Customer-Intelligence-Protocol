@@ -4,6 +4,12 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Protocol, TypedDict, runtime_checkable
 
+DEFAULT_PROVIDER_MODELS: dict[str, str] = {
+    "anthropic": "claude-sonnet-4-6",
+    "openai": "gpt-4o",
+    "mock": "",
+}
+
 
 class HistoryMessage(TypedDict):
     role: str
@@ -48,11 +54,14 @@ def create_provider(
 ) -> LLMProvider:
     if provider_name == "anthropic":
         from cip_protocol.llm.providers.anthropic import AnthropicProvider
-        return AnthropicProvider(api_key=api_key, model=model or "claude-sonnet-4-20250514")
+        return AnthropicProvider(
+            api_key=api_key,
+            model=model or DEFAULT_PROVIDER_MODELS["anthropic"],
+        )
 
     if provider_name == "openai":
         from cip_protocol.llm.providers.openai import OpenAIProvider
-        return OpenAIProvider(api_key=api_key, model=model or "gpt-4o")
+        return OpenAIProvider(api_key=api_key, model=model or DEFAULT_PROVIDER_MODELS["openai"])
 
     if provider_name == "mock":
         from cip_protocol.llm.providers.mock import MockProvider

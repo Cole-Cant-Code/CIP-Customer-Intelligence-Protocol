@@ -111,6 +111,24 @@ class TestMatchScaffold:
         result = match_scaffold(registry, "no_match", user_input="quantum physics lecture")
         assert result is None
 
+    def test_macro_fallback_runs_when_candidate_pruning_finds_none(self):
+        registry = ScaffoldRegistry()
+        desc_only = make_test_scaffold(
+            "desc_only",
+            tools=[],
+            keywords=["zz_unmatched_kw"],
+            intent_signals=["yy unmatched signal"],
+        ).model_copy(update={"description": "categorize spending expenses analysis"})
+        registry.register(desc_only)
+
+        result = match_scaffold(
+            registry,
+            "no_match",
+            user_input="please categorize spending expenses",
+        )
+        assert result is not None
+        assert result.id == "desc_only"
+
     def test_invalid_caller_id_falls_through(self):
         registry = self._registry()
         result = match_scaffold(registry, "analyze", caller_scaffold_id="nonexistent")
