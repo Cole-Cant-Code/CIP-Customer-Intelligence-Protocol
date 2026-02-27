@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from cip_protocol.conversation import Conversation
 
-from cip_protocol.control import ConstraintParser, PresetRegistry, RunPolicy
+from cip_protocol.control import ConstraintParser, PolicyConflictResult, PresetRegistry, RunPolicy
 from cip_protocol.domain import DomainConfig
 from cip_protocol.llm.client import InnerLLMClient, LLMResponse, StreamEvent
 from cip_protocol.llm.provider import LLMProvider, create_provider
@@ -17,7 +17,7 @@ from cip_protocol.llm.response import GuardrailEvaluator
 from cip_protocol.scaffold.engine import ScaffoldEngine
 from cip_protocol.scaffold.loader import load_scaffold_directory
 from cip_protocol.scaffold.registry import ScaffoldRegistry
-from cip_protocol.telemetry import NoOpTelemetrySink, TelemetrySink
+from cip_protocol.telemetry import NoOpTelemetrySink, TelemetryEvent, TelemetrySink
 
 
 @dataclass
@@ -29,6 +29,7 @@ class CIPResult:
     selection_scores: dict[str, float] = field(default_factory=dict)
     policy_source: str = ""
     unrecognized_constraints: list[str] = field(default_factory=list)
+    policy_conflict: PolicyConflictResult | None = None
 
 
 class CIP:
@@ -43,11 +44,14 @@ class CIP:
         preset_registry: PresetRegistry | None = None,
         guardrail_evaluators: list[GuardrailEvaluator] | None = None,
         telemetry_sink: TelemetrySink | None = None,
+        enable_policy_conflict_detection: bool = False,
     ) -> None:
         self.config = config
         self.registry = registry
         self.preset_registry = preset_registry or PresetRegistry()
         sink = telemetry_sink or NoOpTelemetrySink()
+        self._telemetry = sink
+        self._detect_policy_conflicts = enable_policy_conflict_detection
         self.engine = ScaffoldEngine(registry, config, telemetry_sink=sink)
         self.client = InnerLLMClient(
             provider, config,
@@ -67,6 +71,7 @@ class CIP:
         preset_registry: PresetRegistry | None = None,
         guardrail_evaluators: list[GuardrailEvaluator] | None = None,
         telemetry_sink: TelemetrySink | None = None,
+        enable_policy_conflict_detection: bool = False,
     ) -> CIP:
         """Build a CIP instance from a config, scaffold directory, and provider name."""
         registry = ScaffoldRegistry()
@@ -82,6 +87,7 @@ class CIP:
             preset_registry=preset_registry,
             guardrail_evaluators=guardrail_evaluators,
             telemetry_sink=telemetry_sink,
+            enable_policy_conflict_detection=enable_policy_conflict_detection,
         )
 
     def _resolve_policy(
@@ -107,6 +113,22 @@ class CIP:
         chat_history: list[dict[str, str]] | None = None,
     ) -> CIPResult:
         resolved_policy, policy_source, unrecognized = self._resolve_policy(policy)
+
+        policy_conflict = None
+        if self._detect_policy_conflicts and resolved_policy is not None:
+            from cip_protocol.control import detect_policy_conflict as _detect_conflict
+
+            policy_conflict = _detect_conflict(resolved_policy)
+            if policy_conflict.has_conflict:
+                self._telemetry.emit(TelemetryEvent(
+                    name="cip.policy.conflict_detected",
+                    attributes={
+                        "m_score": policy_conflict.m_score,
+                        "dominant_layer": policy_conflict.dominant_layer,
+                        "policy_source": policy_source,
+                    },
+                ))
+
         data = data_context if data_context is not None else {}
 
         scaffold, explanation = self.engine.select_explained(
@@ -139,6 +161,7 @@ class CIP:
             selection_scores=scores,
             policy_source=policy_source,
             unrecognized_constraints=unrecognized,
+            policy_conflict=policy_conflict,
         )
 
     async def stream(

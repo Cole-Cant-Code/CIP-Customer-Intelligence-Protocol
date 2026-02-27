@@ -12,6 +12,7 @@ from cip_protocol.llm.provider import ProviderResponse
 from cip_protocol.llm.providers.mock import MockProvider
 from cip_protocol.llm.response import (
     GuardrailEvaluation,
+    ManticSafetyEvaluator,
     check_guardrails,
     check_guardrails_async,
     enforce_disclaimers,
@@ -543,3 +544,120 @@ class TestAsyncGuardrails:
         )
         assert result.passed
         assert "sync_flag" in result.flags
+
+
+# ---------------------------------------------------------------------------
+# ManticSafetyEvaluator
+# ---------------------------------------------------------------------------
+
+
+class TestManticSafetyEvaluator:
+    def test_clean_content_no_friction(self):
+        scaffold = make_test_scaffold()
+        evaluator = ManticSafetyEvaluator()
+        result = evaluator.evaluate(
+            "This is a perfectly normal response about the weather today.", scaffold,
+        )
+        assert result.evaluator_name == "mantic_safety"
+        assert result.hard_violations == []
+        assert "detection_result" in result.metadata
+
+    def test_escalation_content_produces_flag(self):
+        scaffold = make_test_scaffold(
+            escalation_triggers=[
+                "severe financial distress",
+                "bankruptcy filing",
+                "debt crisis",
+                "foreclosure notice",
+            ],
+        )
+        evaluator = ManticSafetyEvaluator(
+            prohibited_indicators={
+                "guarantees": ("guaranteed to", "i guarantee"),
+                "diagnosis": ("you have", "you are suffering"),
+            },
+        )
+        content = (
+            "You are in severe financial distress and facing bankruptcy filing. "
+            "This is guaranteed to cause a debt crisis and foreclosure notice. "
+            "I guarantee that you have a serious problem and you are suffering. "
+        ) * 5  # repeat to ensure length > 50 chars and high density
+
+        result = evaluator.evaluate(content, scaffold)
+        assert result.hard_violations == []  # never hard-fails
+        assert "detection_result" in result.metadata
+        assert "layer_values" in result.metadata
+
+    def test_never_produces_hard_violations(self):
+        scaffold = make_test_scaffold(
+            escalation_triggers=["emergency", "crisis", "danger"],
+        )
+        evaluator = ManticSafetyEvaluator(
+            prohibited_indicators={
+                "bad": ("very bad", "extremely bad", "terrible"),
+            },
+        )
+        content = (
+            "This is very bad and extremely bad and terrible. "
+            "Emergency crisis danger everywhere. "
+        ) * 10
+
+        result = evaluator.evaluate(content, scaffold)
+        assert result.hard_violations == []
+
+    def test_short_content_short_circuits(self):
+        scaffold = make_test_scaffold(
+            escalation_triggers=["danger"],
+        )
+        evaluator = ManticSafetyEvaluator()
+        result = evaluator.evaluate("danger", scaffold)
+        assert result.flags == []
+        assert result.metadata == {}
+
+    def test_layer_values_bounded(self):
+        scaffold = make_test_scaffold(
+            escalation_triggers=["x"],
+        )
+        evaluator = ManticSafetyEvaluator(
+            prohibited_indicators={"a": ("zzz",)},
+        )
+        # Long content to avoid short-circuit
+        content = "word " * 5000
+        result = evaluator.evaluate(content, scaffold)
+        layer_values = result.metadata.get("layer_values", {})
+        for v in layer_values.values():
+            assert 0.0 <= v <= 1.0
+
+    def test_detection_in_guardrail_check(self):
+        scaffold = make_test_scaffold(
+            escalation_triggers=["distress signal"],
+        )
+        evaluator = ManticSafetyEvaluator()
+        result = check_guardrails(
+            "This is a normal response that is long enough to pass the threshold check easily.",
+            scaffold,
+            evaluators=[evaluator],
+        )
+        assert result.passed  # mantic_safety never hard-fails
+        assert result.mantic_safety is not None
+        assert "m_score" in result.mantic_safety
+
+    @pytest.mark.asyncio
+    async def test_integrated_with_client_pipeline(self):
+        config = make_test_config()
+        provider = MockProvider(response_content="Normal analysis response that is long enough.")
+        evaluator = ManticSafetyEvaluator(
+            prohibited_indicators=config.prohibited_indicators,
+        )
+        client = InnerLLMClient(
+            provider, config=config,
+            guardrail_evaluators=[evaluator],
+        )
+
+        scaffold = make_test_scaffold()
+        prompt = AssembledPrompt(
+            system_message="Analyze.", user_message="Query.",
+        )
+
+        response = await client.invoke(assembled_prompt=prompt, scaffold=scaffold)
+        assert response.content is not None

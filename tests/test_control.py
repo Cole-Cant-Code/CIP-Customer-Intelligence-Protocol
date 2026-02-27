@@ -8,8 +8,11 @@ from cip_protocol.control import (
     BUILTIN_PRESETS,
     ConstraintParser,
     ControlPreset,
+    PolicyConflictResult,
     PresetRegistry,
     RunPolicy,
+    _policy_to_layer_values,
+    detect_policy_conflict,
 )
 
 # ---------------------------------------------------------------------------
@@ -332,3 +335,75 @@ class TestConstraintParser:
         result = ConstraintParser.parse("must include sources, must include citations")
         assert "sources" in result.policy.extra_must_include
         assert "citations" in result.policy.extra_must_include
+
+
+# ---------------------------------------------------------------------------
+# Policy Conflict Detection
+# ---------------------------------------------------------------------------
+
+
+class TestPolicyConflictDetection:
+    def test_neutral_policy_no_conflict(self):
+        policy = RunPolicy()
+        result = detect_policy_conflict(policy)
+        assert isinstance(result, PolicyConflictResult)
+        assert result.m_score >= 0
+        assert not result.has_conflict
+        assert result.signal != "friction_detected"
+
+    def test_contradictory_policy_detects_friction(self):
+        policy = RunPolicy(
+            temperature=1.8,  # very creative
+            output_format="bullet_points",  # strict format
+            max_length_guidance="concise, under 100 words",  # tight length
+            compact=True,
+            skip_disclaimers=True,
+            remove_prohibited_actions=["*"],
+        )
+        result = detect_policy_conflict(policy)
+        assert isinstance(result, PolicyConflictResult)
+        # High creativity + high strictness + low safety = tension
+        assert result.signal in ("friction_detected", "baseline", "emergence_window")
+
+    def test_aligned_creative_policy_no_conflict(self):
+        policy = RunPolicy(
+            temperature=1.6,
+            max_length_guidance="no length constraint",
+        )
+        result = detect_policy_conflict(policy)
+        assert isinstance(result, PolicyConflictResult)
+
+    def test_layer_values_bounded(self):
+        # Extreme policy — all values should still be in [0, 1]
+        policy = RunPolicy(
+            temperature=2.0,
+            output_format="json",
+            max_length_guidance="under 10 words",
+            compact=True,
+            skip_disclaimers=True,
+            remove_prohibited_actions=["*"],
+            extra_must_include=["a", "b", "c", "d", "e"],
+            extra_prohibited_actions=["x", "y", "z", "w"],
+        )
+        layer_values = _policy_to_layer_values(policy)
+        for name, v in layer_values.items():
+            assert 0.0 <= v <= 1.0, f"{name}={v} out of bounds"
+
+    def test_summary_property(self):
+        policy = RunPolicy()
+        result = detect_policy_conflict(policy)
+        summary = result.summary
+        assert isinstance(summary, str)
+        assert "m_score=" in summary
+
+    def test_coherence_present(self):
+        policy = RunPolicy(temperature=0.5)
+        result = detect_policy_conflict(policy)
+        assert 0.0 <= result.coherence <= 1.0
+
+    def test_preset_aggressive_low_safety(self):
+        policy = RunPolicy.from_preset(BUILTIN_PRESETS["aggressive"])
+        layer_values = _policy_to_layer_values(policy)
+        # aggressive: skip_disclaimers=True, remove_prohibited=["*"]
+        # safety_priority should be low
+        assert layer_values["safety_priority"] < 0.1

@@ -55,6 +55,7 @@ class GuardrailCheck:
     hard_violations: list[str] = field(default_factory=list)
     matched_phrases: list[str] = field(default_factory=list)
     evaluator_findings: list[dict[str, Any]] = field(default_factory=list)
+    mantic_safety: dict[str, Any] | None = None
 
 
 @runtime_checkable
@@ -199,6 +200,119 @@ class RegexPolicyEvaluator:
         )
 
 
+class ManticSafetyEvaluator:
+    """Mantic friction detection over guardrail content signals.
+
+    Soft evaluator — never produces hard violations.  Opt-in only; not
+    included in ``default_guardrail_evaluators()``.
+    """
+
+    name = "mantic_safety"
+
+    def __init__(
+        self,
+        prohibited_indicators: dict[str, tuple[str, ...]] | None = None,
+        detection_threshold: float = 0.4,
+        backend: str = "auto",
+    ) -> None:
+        self._detection_threshold = detection_threshold
+        self._backend = backend
+        self._prohibited_indicators = prohibited_indicators or {}
+        # Pre-compile prohibited patterns (reuses the module-level helper)
+        self._compiled_prohibited: list[tuple[str, re.Pattern[str]]] = []
+        for patterns in self._prohibited_indicators.values():
+            for pattern in patterns:
+                normalized = " ".join(pattern.lower().split())
+                if normalized:
+                    self._compiled_prohibited.append(
+                        (pattern, _compile_indicator_pattern(normalized))
+                    )
+
+    def evaluate(self, content: str, scaffold: Scaffold) -> GuardrailEvaluation:
+        # Short-circuit for very short content (streaming early chunks)
+        if len(content) < 50:
+            return GuardrailEvaluation(evaluator_name=self.name)
+
+        content_lower = " ".join(content.lower().split())
+        content_tokens = _tokenize(content_lower)
+
+        # --- Layer 1: escalation_density ---
+        triggers = list(scaffold.guardrails.escalation_triggers)
+        if triggers:
+            matched_triggers = sum(
+                1 for trigger in triggers
+                if sum(1 for t in _tokenize(trigger) if t in content_tokens)
+                >= len(_tokenize(trigger)) * 0.6
+            )
+            escalation_density = min(1.0, matched_triggers / len(triggers))
+        else:
+            escalation_density = 0.0
+
+        # --- Layer 2: prohibited_density ---
+        if self._compiled_prohibited:
+            matched_prohibited = sum(
+                1 for _, regex in self._compiled_prohibited
+                if regex.search(content_lower)
+            )
+            prohibited_density = min(1.0, matched_prohibited / len(self._compiled_prohibited))
+        else:
+            prohibited_density = 0.0
+
+        # --- Layer 3: topic_sensitivity (Jaccard with trigger tokens) ---
+        all_trigger_tokens: set[str] = set()
+        for trigger in triggers:
+            all_trigger_tokens.update(_tokenize(trigger))
+        if all_trigger_tokens and content_tokens:
+            intersection = content_tokens & all_trigger_tokens
+            union = content_tokens | all_trigger_tokens
+            topic_sensitivity = len(intersection) / len(union) if union else 0.0
+        else:
+            topic_sensitivity = 0.0
+
+        # --- Layer 4: response_length_risk ---
+        word_count = len(content.split())
+        response_length_risk = min(1.0, word_count / 2000)
+
+        layer_values = [
+            escalation_density,
+            prohibited_density,
+            topic_sensitivity,
+            response_length_risk,
+        ]
+
+        # Local import to stay within the CI import guard
+        from cip_protocol.mantic_adapter import detect_safety_friction
+
+        result = detect_safety_friction(
+            layer_values=layer_values,
+            backend=self._backend,
+            detection_threshold=self._detection_threshold,
+        )
+
+        flags: list[str] = []
+        if result.signal == "friction_detected":
+            flags.append(
+                f"mantic_safety_friction: m_score={result.m_score:.3f} "
+                f"dominant={result.dominant_layer}"
+            )
+
+        import dataclasses
+
+        return GuardrailEvaluation(
+            evaluator_name=self.name,
+            flags=flags,
+            metadata={
+                "detection_result": dataclasses.asdict(result),
+                "layer_values": {
+                    "escalation_density": escalation_density,
+                    "prohibited_density": prohibited_density,
+                    "topic_sensitivity": topic_sensitivity,
+                    "response_length_risk": response_length_risk,
+                },
+            },
+        )
+
+
 # ---------------------------------------------------------------------------
 # Guardrail orchestration (sync + async)
 # ---------------------------------------------------------------------------
@@ -235,12 +349,22 @@ def _aggregate_results(
             "metadata": result.metadata,
         })
 
+    # Extract mantic_safety detection result if present
+    mantic_safety: dict[str, Any] | None = None
+    for finding in findings:
+        if finding["evaluator"] == "mantic_safety":
+            dr = finding["metadata"].get("detection_result")
+            if dr is not None:
+                mantic_safety = dr
+            break
+
     return GuardrailCheck(
         passed=not hard_violations,
         flags=all_flags,
         hard_violations=hard_violations,
         matched_phrases=matched_phrases,
         evaluator_findings=findings,
+        mantic_safety=mantic_safety,
     )
 
 

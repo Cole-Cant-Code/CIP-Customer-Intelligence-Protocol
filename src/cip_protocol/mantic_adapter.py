@@ -286,3 +286,67 @@ def detect(
     return get_backend(backend).detect(
         layer_names=layer_names, layer_values=layer_values, **kwargs
     )
+
+
+# ---------------------------------------------------------------------------
+# Domain-specific convenience wrappers
+# ---------------------------------------------------------------------------
+
+
+def _clamp(v: float) -> float:
+    return max(0.0, min(1.0, v))
+
+
+def detect_safety_friction(
+    *,
+    layer_values: list[float] | tuple[float, ...],
+    backend: Backend = "auto",
+    detection_threshold: float = 0.4,
+) -> DetectionResult:
+    """Safety evaluator friction detection for CIP guardrail content.
+
+    Layer order: escalation_density, prohibited_density, topic_sensitivity,
+    response_length_risk.
+    """
+    clamped = [_clamp(v) for v in layer_values]
+    return detect(
+        layer_names=[
+            "escalation_density",
+            "prohibited_density",
+            "topic_sensitivity",
+            "response_length_risk",
+        ],
+        layer_values=clamped,
+        weights=[0.30, 0.35, 0.20, 0.15],
+        mode="friction",
+        domain_name="cip_safety",
+        backend=backend,
+        detection_threshold=detection_threshold,
+    )
+
+
+def detect_policy_conflict(
+    *,
+    layer_values: list[float] | tuple[float, ...],
+    backend: Backend = "auto",
+    detection_threshold: float = 0.4,
+) -> DetectionResult:
+    """RunPolicy conflict detection — surfaces tension between policy fields.
+
+    Layer order: creativity, constraint_strictness, safety_priority, verbosity.
+    """
+    clamped = [_clamp(v) for v in layer_values]
+    return detect(
+        layer_names=[
+            "creativity",
+            "constraint_strictness",
+            "safety_priority",
+            "verbosity",
+        ],
+        layer_values=clamped,
+        weights=[0.30, 0.25, 0.25, 0.20],
+        mode="friction",
+        domain_name="cip_policy",
+        backend=backend,
+        detection_threshold=detection_threshold,
+    )

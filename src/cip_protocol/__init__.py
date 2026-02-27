@@ -2,8 +2,10 @@ from cip_protocol.cip import CIP, CIPResult
 from cip_protocol.control import (
     ConstraintParser,
     ControlPreset,
+    PolicyConflictResult,
     PresetRegistry,
     RunPolicy,
+    detect_policy_conflict,
 )
 from cip_protocol.conversation import Conversation, Turn
 from cip_protocol.data import (
@@ -23,8 +25,10 @@ from cip_protocol.domain import DomainConfig
 from cip_protocol.mantic_adapter import (
     Backend,
     DetectionResult,
+    detect_safety_friction,
     get_backend,
 )
+from cip_protocol.llm.response import ManticSafetyEvaluator
 from cip_protocol.engagement import (
     EscalationCallback,
     EscalationConfig,
@@ -87,7 +91,9 @@ __all__ = [
     "LeadEvent",
     "LeadScoringConfig",
     "LoggerTelemetrySink",
+    "ManticSafetyEvaluator",
     "NoOpTelemetrySink",
+    "PolicyConflictResult",
     "PresetRegistry",
     "PrivacyClassification",
     "PrivacyPolicy",
@@ -102,6 +108,8 @@ __all__ = [
     "check_escalation",
     "clean_numeric_string",
     "compute_lead_score",
+    "detect_policy_conflict",
+    "detect_safety_friction",
     "get_backend",
     "infer_lead_status",
     "lead_score_band",

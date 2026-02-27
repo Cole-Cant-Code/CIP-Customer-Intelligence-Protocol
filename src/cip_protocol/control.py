@@ -403,3 +403,121 @@ class ConstraintParser:
 
         policy = RunPolicy(**overrides)
         return ParseResult(policy=policy, parsed=parsed, unrecognized=unrecognized)
+
+
+# ---------------------------------------------------------------------------
+# Policy Conflict Detection
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PolicyConflictResult:
+    """Result of mantic friction detection across RunPolicy dimensions."""
+
+    has_conflict: bool
+    m_score: float
+    signal: str
+    dominant_layer: str
+    tension_pairs: list[tuple[str, str, float]]
+    layer_values: dict[str, float]
+    coherence: float
+
+    @property
+    def summary(self) -> str:
+        if not self.has_conflict:
+            return f"No policy conflict (m_score={self.m_score:.3f}, coherence={self.coherence:.2f})"
+        pairs = ", ".join(f"{a}<>{b}" for a, b, _ in self.tension_pairs)
+        return (
+            f"Policy conflict detected: m_score={self.m_score:.3f}, "
+            f"dominant={self.dominant_layer}, tensions=[{pairs}], "
+            f"coherence={self.coherence:.2f}"
+        )
+
+
+def _policy_to_layer_values(policy: RunPolicy) -> dict[str, float]:
+    """Map RunPolicy fields to mantic layer values in [0, 1]."""
+
+    # creativity — temperature / 2.0 (temp range is 0–2)
+    creativity = policy.temperature / 2.0 if policy.temperature is not None else 0.5
+
+    # constraint_strictness — start neutral, then add structural constraints
+    # so a default policy doesn't look inherently contradictory.
+    strictness = 0.5
+    if policy.output_format is not None:
+        strictness += 0.3
+    if policy.max_length_guidance is not None:
+        strictness += 0.3
+    if policy.compact:
+        strictness += 0.2
+    must_include_bonus = min(0.2, len(policy.extra_must_include) * 0.1)
+    strictness += must_include_bonus
+
+    # safety_priority — starts at 0.5, adjusted by safety-related fields
+    safety = 0.5
+    if policy.skip_disclaimers:
+        safety -= 0.3
+    if "*" in policy.remove_prohibited_actions:
+        safety -= 0.3
+    else:
+        safety -= min(0.2, len(policy.remove_prohibited_actions) * 0.1)
+    extra_prohibited_bonus = min(0.3, len(policy.extra_prohibited_actions) * 0.1)
+    safety += extra_prohibited_bonus
+
+    # verbosity — neutral by default, then tuned by explicit guidance
+    verbosity = 0.5
+    if policy.max_length_guidance is not None:
+        guidance = policy.max_length_guidance.lower()
+        if "concise" in guidance or "brief" in guidance:
+            verbosity = 0.2
+        else:
+            # Try to extract "under N words"
+            m = re.search(r"under\s+(\d+)\s+words?", guidance)
+            if m:
+                n = int(m.group(1))
+                verbosity = min(1.0, n / 2000)
+            elif "no length constraint" in guidance or "no limit" in guidance:
+                verbosity = 0.9
+            else:
+                verbosity = 0.5  # unrecognized guidance
+    if policy.compact:
+        verbosity = max(0.0, verbosity - 0.1)
+
+    def clamp(v: float) -> float:
+        return max(0.0, min(1.0, v))
+
+    return {
+        "creativity": clamp(creativity),
+        "constraint_strictness": clamp(strictness),
+        "safety_priority": clamp(safety),
+        "verbosity": clamp(verbosity),
+    }
+
+
+def detect_policy_conflict(
+    policy: RunPolicy,
+    *,
+    backend: str = "auto",
+    detection_threshold: float = 0.4,
+) -> PolicyConflictResult:
+    """Detect friction between RunPolicy dimensions using mantic detection."""
+    from cip_protocol.mantic_adapter import detect_policy_conflict as _adapter_detect
+
+    layer_map = _policy_to_layer_values(policy)
+    layer_order = ["creativity", "constraint_strictness", "safety_priority", "verbosity"]
+    values = [layer_map[k] for k in layer_order]
+
+    result = _adapter_detect(
+        layer_values=values,
+        backend=backend,
+        detection_threshold=detection_threshold,
+    )
+
+    return PolicyConflictResult(
+        has_conflict=result.signal == "friction_detected",
+        m_score=result.m_score,
+        signal=result.signal,
+        dominant_layer=result.dominant_layer,
+        tension_pairs=result.tension_pairs,
+        layer_values=layer_map,
+        coherence=result.coherence,
+    )

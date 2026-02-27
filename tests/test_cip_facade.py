@@ -9,6 +9,7 @@ from cip_protocol.cip import CIP, CIPResult
 from cip_protocol.control import RunPolicy
 from cip_protocol.llm.providers.mock import MockProvider
 from cip_protocol.scaffold.registry import ScaffoldRegistry
+from cip_protocol.telemetry import InMemoryTelemetrySink
 
 
 def _make_cip(
@@ -157,3 +158,71 @@ class TestCIPConversation:
         cip = _make_cip()
         conv = cip.conversation(max_history_turns=5)
         assert conv._max_history_turns == 5
+
+
+# ---------------------------------------------------------------------------
+# Policy Conflict Detection in CIP
+# ---------------------------------------------------------------------------
+
+
+def _make_cip_with_conflict(
+    enable: bool = True,
+    provider=None,
+    telemetry_sink=None,
+) -> CIP:
+    registry = ScaffoldRegistry()
+    registry.register(make_test_scaffold())
+    config = make_test_config()
+    return CIP(
+        config, registry, provider or MockProvider(),
+        enable_policy_conflict_detection=enable,
+        telemetry_sink=telemetry_sink,
+    )
+
+
+class TestCIPPolicyConflictDetection:
+    @pytest.mark.asyncio
+    async def test_conflict_detection_opt_in(self):
+        cip = _make_cip_with_conflict(enable=True)
+        policy = RunPolicy(
+            temperature=1.8,
+            output_format="bullet_points",
+            max_length_guidance="concise, under 100 words",
+            compact=True,
+            skip_disclaimers=True,
+            remove_prohibited_actions=["*"],
+        )
+        result = await cip.run("test query", tool_name="test_tool", policy=policy)
+        assert result.policy_conflict is not None
+        assert result.policy_conflict.m_score >= 0
+
+    @pytest.mark.asyncio
+    async def test_conflict_detection_disabled_by_default(self):
+        cip = _make_cip()
+        policy = RunPolicy(temperature=1.8, skip_disclaimers=True)
+        result = await cip.run("test query", tool_name="test_tool", policy=policy)
+        assert result.policy_conflict is None
+
+    @pytest.mark.asyncio
+    async def test_no_policy_no_conflict(self):
+        cip = _make_cip_with_conflict(enable=True)
+        result = await cip.run("test query", tool_name="test_tool", policy=None)
+        assert result.policy_conflict is None
+
+    @pytest.mark.asyncio
+    async def test_conflict_telemetry_emitted(self):
+        sink = InMemoryTelemetrySink()
+        cip = _make_cip_with_conflict(enable=True, telemetry_sink=sink)
+        # Use a contradictory policy that's likely to trigger friction
+        policy = RunPolicy(
+            temperature=1.8,
+            output_format="bullet_points",
+            max_length_guidance="concise, under 50 words",
+            compact=True,
+            skip_disclaimers=True,
+            remove_prohibited_actions=["*"],
+        )
+        result = await cip.run("test query", tool_name="test_tool", policy=policy)
+        if result.policy_conflict and result.policy_conflict.has_conflict:
+            names = [e.name for e in sink.events]
+            assert "cip.policy.conflict_detected" in names
