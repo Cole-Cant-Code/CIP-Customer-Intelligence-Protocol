@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from cip_protocol.domain import DomainConfig
+from cip_protocol.scaffold.loader import load_builtin_scaffolds
 from cip_protocol.scaffold.matcher import (
     SelectionExplanation,
     SelectionParams,
@@ -39,6 +40,7 @@ class ScaffoldEngine:
         self.config = config
         self.telemetry = telemetry_sink or NoOpTelemetrySink()
         self._last_scaffold_id: str | None = None
+        load_builtin_scaffolds(registry)
 
     def _build_params(self, policy: RunPolicy | None = None) -> SelectionParams:
         """Build SelectionParams from policy and engine config."""

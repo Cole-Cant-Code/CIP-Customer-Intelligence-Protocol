@@ -22,6 +22,12 @@ class ScaffoldRegistry:
         for tag in scaffold.tags:
             self._by_tag.setdefault(tag, []).append(scaffold.id)
 
+    def register_tool_alias(self, tool_name: str, scaffold_id: str) -> None:
+        """Register an additional tool name mapping for an existing scaffold."""
+        if scaffold_id not in self._scaffolds:
+            raise ValueError(f"Scaffold {scaffold_id!r} not registered")
+        self._by_tool.setdefault(tool_name, []).append(scaffold_id)
+
     def get(self, scaffold_id: str) -> Scaffold | None:
         return self._scaffolds.get(scaffold_id)
 

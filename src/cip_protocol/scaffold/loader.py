@@ -45,6 +45,39 @@ def load_scaffold_directory(directory: str | Path, registry: ScaffoldRegistry) -
     return count
 
 
+def load_builtin_scaffolds(registry: ScaffoldRegistry) -> int:
+    """Load builtin scaffolds from the package's builtins/ directory.
+
+    Skips scaffolds whose ID is already registered (domain scaffolds take
+    precedence).  For builtins with an empty tools list, the scaffold's
+    domain is registered as a tool alias so ``find_by_tool(domain)`` works.
+    """
+    builtins_dir = Path(__file__).parent / "builtins"
+    if not builtins_dir.is_dir():
+        return 0
+
+    count = 0
+    for path in sorted(builtins_dir.rglob("*.yaml")):
+        if path.name.startswith("_"):
+            continue
+        try:
+            scaffold = load_scaffold_file(path)
+            if registry.get(scaffold.id) is not None:
+                logger.debug(
+                    "Builtin scaffold %s skipped — already registered", scaffold.id,
+                )
+                continue
+            registry.register(scaffold)
+            if not scaffold.applicability.tools:
+                registry.register_tool_alias(scaffold.domain, scaffold.id)
+            count += 1
+        except (yaml.YAMLError, KeyError, ValueError, TypeError) as exc:
+            logger.exception("Failed to load builtin scaffold from %s: %s", path, exc)
+    if count > 0:
+        prepare_matcher_cache(registry)
+    return count
+
+
 def load_scaffold_file(path: Path) -> Scaffold:
     with open(path, encoding="utf-8") as f:
         raw_data = yaml.safe_load(f)

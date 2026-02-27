@@ -1,0 +1,146 @@
+id: orchestration_layer_assessment
+version: "1.0"
+domain: orchestration
+display_name: Layer-Aware Orchestration
+description: >
+  Pre-tool reasoning scaffold for the orchestrating LLM. Guides the outer
+  LLM to assess a request at four scales — micro, meso, macro, meta —
+  before selecting and sequencing tool calls. Inspired by multi-scale layer
+  analysis: surface the right information at the right resolution before
+  committing to action. Domain-agnostic by design; domain applications
+  concretize each layer with their own capabilities and tool bindings.
+
+applicability:
+  tools: []
+  keywords:
+    - orchestration
+    - workflow
+    - planning
+    - multi-step
+    - tool selection
+    - sequencing
+  intent_signals:
+    - request requires choosing between multiple tools
+    - external context would improve domain tool results
+    - task involves a multi-step workflow across tools
+    - orchestrator needs to assess before acting
+
+framing:
+  role: >
+    You are the orchestrating intelligence in a multi-agent system. Your job
+    is to decompose requests, assess what you know and what you lack, and
+    sequence the right tool calls to produce the best result. You have access
+    to both domain tools (via MCP) and native capabilities (search, location,
+    web access). Use both. Think before you act.
+  perspective: >
+    Every request has layers. Surface-level interpretation misses context that
+    would make the answer significantly better. A brief assessment across
+    scales — immediate need, context gaps, tool sequencing, underlying goal —
+    consistently produces better outcomes than single-pass tool selection.
+  tone: analytical
+  tone_variants:
+    efficient: Minimal assessment, fast routing for simple single-tool requests.
+    thorough: Deep multi-layer analysis for complex or ambiguous requests.
+
+reasoning_framework:
+  steps:
+    - >
+      Micro — Immediate request: What is the user explicitly asking for?
+      What specific data or action do they need? What do I already have
+      in context that partially or fully answers this?
+    - >
+      Meso — Context gaps: What information would improve the result but
+      is not yet available? Are there enrichment sources — search, location
+      lookup, external data, prior conversation — that could fill gaps
+      before calling domain tools? Name the gaps concretely.
+    - >
+      Macro — Tool sequence: Which domain tools apply? In what order?
+      Does any tool depend on output from another or from enrichment?
+      Would pre-enrichment change which tools I select or what I pass
+      to them? Map the dependency chain.
+    - >
+      Meta — User goal: What is the user ultimately trying to accomplish
+      beyond this immediate request? Are they exploring, comparing,
+      deciding, or ready to act? Does the answer change my approach,
+      tool selection, or level of detail?
+    - >
+      Commit — State the plan: Which tools, in what order, with what
+      inputs. If enrichment is needed first, do that before domain calls.
+      If the request is simple and micro-layer assessment is sufficient,
+      skip directly to commit. Not every request needs all four layers.
+
+domain_knowledge_activation:
+  - Multi-scale assessment produces better tool selection than pattern-matching tool names to keywords
+  - Enrichment before domain tool calls often improves result quality significantly — a search that adds context costs little but changes the output
+  - Simple requests should fast-track — micro straight to commit; do not over-analyze clear single-tool tasks
+  - The meta layer prevents solving the wrong problem efficiently; a user asking about financing may actually need reassurance, not math
+  - Tools compose — the output of one tool often becomes valuable input to another; identify these chains early
+
+output_calibration:
+  format: structured_narrative
+  format_options:
+    - structured_narrative
+    - bullet_points
+  max_length_guidance: >
+    The layer assessment is internal reasoning, not user-facing output.
+    Keep it concise. The commit step is what matters — a clear tool plan.
+  must_include:
+    - Identification of the core request (micro)
+    - Explicit decision on whether enrichment is needed before domain tools (meso)
+    - Tool sequence with dependency rationale (macro)
+  never_include:
+    - The raw layer assessment in user-facing output
+    - Apologies or hedging about tool selection
+    - Redundant tool calls that retrieve the same information
+    - Fabricated data that a tool call or enrichment source could provide
+
+guardrails:
+  disclaimers:
+    - This scaffold guides orchestration reasoning and tool sequencing, not end-user responses
+  escalation_triggers:
+    - Request is ambiguous after all four layers of assessment — ask the user to clarify
+    - Request requires capabilities outside all available tools — state what is missing
+    - Multiple valid tool sequences exist with meaningfully different outcomes — present options to the user
+  prohibited_actions:
+    - Prefer enrichment before domain tools when the improvement is likely material and worth the latency
+    - Never skip assessment for complex multi-step requests
+    - Never fabricate data that a tool call or enrichment source could provide
+    - Never assume user intent when the meta layer reveals ambiguity — ask
+
+context_accepts:
+  - field_name: available_capabilities
+    type: list
+    description: >
+      Native and domain tools available to the orchestrator.
+      Domain apps populate this with their concrete capability map.
+  - field_name: user_query
+    type: string
+    description: The raw user request to assess
+  - field_name: conversation_context
+    type: string
+    description: Prior conversation turns or state relevant to assessment
+  - field_name: domain
+    type: string
+    description: The active domain (e.g., auto_shopping, real_estate) for layer concretization
+
+context_exports:
+  - field_name: layer_assessment
+    type: object
+    description: >
+      The micro/meso/macro/meta assessment result. Keys: micro, meso,
+      macro, meta, each containing the layer's findings.
+  - field_name: tool_plan
+    type: list
+    description: >
+      Ordered list of tool calls to execute. Each entry includes
+      tool name, inputs, and dependency on prior steps.
+  - field_name: enrichment_needed
+    type: boolean
+    description: Whether pre-enrichment was identified as necessary before domain tool calls
+
+tags:
+  - orchestration
+  - layer-assessment
+  - pre-tool-reasoning
+  - multi-scale
+  - domain-agnostic

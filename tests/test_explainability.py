@@ -91,7 +91,7 @@ class TestSelectExplained:
         scaffold, explanation = engine.select_explained("", user_input="show me my spending money")
         assert scaffold.id == "s1"
         assert explanation.selection_mode == "scored"
-        assert len(explanation.scores) == 2
+        assert len(explanation.scores) >= 2
 
     def test_scored_mode_has_confidence(self):
         s1 = make_test_scaffold("s1", keywords=["spending", "money"], tools=[])

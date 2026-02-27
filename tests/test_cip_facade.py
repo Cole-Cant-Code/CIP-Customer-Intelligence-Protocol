@@ -136,7 +136,8 @@ class TestCIPFromConfig:
         )
         config = make_test_config()
         cip = CIP.from_config(config, str(tmp_path), "mock")
-        assert len(cip.registry.all()) == 1
+        assert any(s.id == "test_scaffold" for s in cip.registry.all())
+        assert len(cip.registry.all()) >= 1
 
     def test_from_config_accepts_provider_instance(self):
         config = make_test_config()

@@ -4,6 +4,7 @@ import pytest
 from conftest import make_test_config, make_test_scaffold
 
 from cip_protocol.scaffold.engine import ScaffoldEngine, ScaffoldNotFoundError
+from cip_protocol.scaffold.loader import load_scaffold_directory
 from cip_protocol.scaffold.registry import ScaffoldRegistry
 from cip_protocol.telemetry import InMemoryTelemetrySink
 
@@ -147,3 +148,65 @@ class TestScaffoldMatching:
 
         with pytest.raises(ScaffoldNotFoundError):
             engine.select(tool_name="no_match", user_input="planetary motion is stable")
+
+
+class TestBuiltinScaffolds:
+    def test_builtins_auto_register_on_engine_init(self):
+        registry = ScaffoldRegistry()
+        ScaffoldEngine(registry)
+        assert registry.get("orchestration_layer_assessment") is not None
+
+    def test_orchestration_selected_by_tool_name(self):
+        registry = ScaffoldRegistry()
+        registry.register(make_test_scaffold("fallback", tools=["other"]))
+        config = make_test_config(default_scaffold_id="fallback")
+        engine = ScaffoldEngine(registry, config=config)
+        scaffold = engine.select(tool_name="orchestration")
+        assert scaffold.id == "orchestration_layer_assessment"
+
+    def test_orchestration_selected_by_intent_signal(self):
+        registry = ScaffoldRegistry()
+        registry.register(make_test_scaffold("fallback", tools=[]))
+        config = make_test_config(default_scaffold_id="fallback")
+        engine = ScaffoldEngine(registry, config=config)
+        scaffold = engine.select(
+            tool_name="no_match",
+            user_input="this request requires choosing between multiple tools",
+        )
+        assert scaffold.id == "orchestration_layer_assessment"
+
+    def test_domain_scaffolds_dont_clobber_builtins(self, tmp_path):
+        # Load domain scaffolds first, then create engine (which loads builtins)
+        registry = ScaffoldRegistry()
+        scaffold_file = tmp_path / "domain.yaml"
+        scaffold_file.write_text(
+            "id: domain_scaffold\n"
+            "version: '1.0'\n"
+            "domain: test\n"
+            "display_name: Domain Test\n"
+            "description: A domain scaffold\n"
+            "applicability:\n"
+            "  tools: [domain_tool]\n"
+            "  keywords: [domain]\n"
+            "framing:\n"
+            "  role: Domain analyst\n"
+            "  perspective: Analytical\n"
+            "  tone: neutral\n"
+            "reasoning_framework:\n"
+            "  steps: [Analyze]\n"
+            "domain_knowledge_activation: [domain knowledge]\n"
+            "output_calibration:\n"
+            "  format: structured_narrative\n"
+            "guardrails:\n"
+            "  disclaimers: [Test disclaimer]\n"
+        )
+        load_scaffold_directory(str(tmp_path), registry)
+        engine = ScaffoldEngine(registry)
+
+        # Both should be present
+        assert registry.get("domain_scaffold") is not None
+        assert registry.get("orchestration_layer_assessment") is not None
+
+        # Each selectable by its own tool name
+        assert engine.select(tool_name="domain_tool").id == "domain_scaffold"
+        assert engine.select(tool_name="orchestration").id == "orchestration_layer_assessment"
