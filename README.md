@@ -431,6 +431,18 @@ CIP_REQUIRE_MANTIC=1 python scripts/check_mantic_runtime.py
 
 **[CIP-Claude](https://github.com/Cole-Cant-Code/CIP-Claude)** — a personal finance MCP server built on this protocol.
 
+## Ecosystem Licensing
+
+The CIP ecosystem uses an open-core model with explicit boundaries:
+
+- **CIP protocol core (this repository):** MIT.
+- **Connector clients (Auto.dev, NHTSA, Zillow, Redfin, MLS):** moving to a
+  standalone MIT layer (`cip-connectors`) so API wrappers stay open.
+- **Domain applications (AutoCIP, RealEstateCIP):** BUSL-1.1 with explicit
+  safe harbors and conversion to Apache-2.0 two years after each tagged release.
+- **Mantic kernel (`mantic-thinking`):** Elastic License 2.0 plus commercial
+  terms, including a free startup commercial embedding tier with registration.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
