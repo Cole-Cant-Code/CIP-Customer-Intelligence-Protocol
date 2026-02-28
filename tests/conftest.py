@@ -34,6 +34,7 @@ def make_test_scaffold(
     prohibited_actions: list[str] | None = None,
     escalation_triggers: list[str] | None = None,
     data_requirements: list[DataRequirement] | None = None,
+    tags: list[str] | None = None,
 ) -> Scaffold:
     """Create a minimal scaffold for testing."""
     return Scaffold(
@@ -65,6 +66,7 @@ def make_test_scaffold(
             prohibited_actions=prohibited_actions or [],
         ),
         data_requirements=data_requirements or [],
+        tags=tags or [],
     )
 
 

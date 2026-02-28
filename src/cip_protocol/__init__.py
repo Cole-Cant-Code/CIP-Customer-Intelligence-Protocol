@@ -22,20 +22,13 @@ from cip_protocol.data import (
     ValidationResult,
 )
 from cip_protocol.domain import DomainConfig
-from cip_protocol.mantic_adapter import (
-    Backend,
-    DetectionResult,
-    detect_safety_friction,
-    get_backend,
-)
-from cip_protocol.llm.response import ManticSafetyEvaluator
 from cip_protocol.engagement import (
     EscalationCallback,
     EscalationConfig,
     EscalationDetector,
     EscalationStore,
-    LayerMapping,
     LayeredScoreResult,
+    LayerMapping,
     LeadEvent,
     LeadScoringConfig,
     check_escalation,
@@ -48,6 +41,16 @@ from cip_protocol.engagement import (
     parse_price,
     recency_multiplier,
     score_lead_with_layers,
+)
+from cip_protocol.llm.response import ArgumentStructureEvaluator, ManticSafetyEvaluator
+from cip_protocol.mantic_adapter import (
+    Backend,
+    DetectionResult,
+    FallacyResult,
+    classify_fallacy,
+    detect_argument_friction,
+    detect_safety_friction,
+    get_backend,
 )
 from cip_protocol.orchestration import (
     ProviderPool,
@@ -65,6 +68,7 @@ from cip_protocol.telemetry import (
 )
 
 __all__ = [
+    "ArgumentStructureEvaluator",
     "Backend",
     "CIP",
     "CIPResult",
@@ -85,6 +89,7 @@ __all__ = [
     "EscalationConfig",
     "EscalationDetector",
     "EscalationStore",
+    "FallacyResult",
     "InMemoryTelemetrySink",
     "LayerMapping",
     "LayeredScoreResult",
@@ -106,8 +111,10 @@ __all__ = [
     "build_cross_domain_context",
     "build_raw_response",
     "check_escalation",
+    "classify_fallacy",
     "clean_numeric_string",
     "compute_lead_score",
+    "detect_argument_friction",
     "detect_policy_conflict",
     "detect_safety_friction",
     "get_backend",

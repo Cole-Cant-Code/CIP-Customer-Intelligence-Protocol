@@ -313,6 +313,90 @@ class ManticSafetyEvaluator:
         )
 
 
+class ArgumentStructureEvaluator:
+    """Mantic friction detection over argument structure layer scores.
+
+    Soft evaluator — never produces hard violations.  Only activates when
+    ``"argument-analysis" in scaffold.tags``.  Extracts four layer scores
+    from LLM response text via regex, then delegates to
+    ``detect_argument_friction`` / ``classify_fallacy``.
+    """
+
+    name = "argument_structure"
+
+    def __init__(
+        self,
+        detection_threshold: float = 0.4,
+        backend: str = "auto",
+    ) -> None:
+        self._detection_threshold = detection_threshold
+        self._backend = backend
+
+    def evaluate(self, content: str, scaffold: Scaffold) -> GuardrailEvaluation:
+        # Only activate for argument-analysis scaffolds
+        if "argument-analysis" not in getattr(scaffold, "tags", []):
+            return GuardrailEvaluation(evaluator_name=self.name)
+
+        # Short-circuit for very short content
+        if len(content) < 50:
+            return GuardrailEvaluation(evaluator_name=self.name)
+
+        # Extract layer scores from content
+        layer_names = [
+            "premise_strength",
+            "inferential_link",
+            "structural_validity",
+            "scope_consistency",
+        ]
+        layer_values: dict[str, float] = {}
+        for layer in layer_names:
+            # Match patterns like "premise_strength: 0.7" or "premise strength  0.85"
+            pattern = _compile(
+                layer.replace("_", r"[\s_]+") + r"[\s:]+(\d+\.?\d*)",
+                re.IGNORECASE,
+            )
+            match = pattern.search(content)
+            if match:
+                val = float(match.group(1))
+                layer_values[layer] = max(0.0, min(1.0, val))
+
+        # Need all 4 layers to proceed
+        if len(layer_values) != 4:
+            return GuardrailEvaluation(evaluator_name=self.name)
+
+        import dataclasses
+
+        from cip_protocol.mantic_adapter import (
+            classify_fallacy,
+            detect_argument_friction,
+        )
+
+        values_list = [layer_values[n] for n in layer_names]
+        detection = detect_argument_friction(
+            layer_values=values_list,
+            backend=self._backend,
+            detection_threshold=self._detection_threshold,
+        )
+        fallacy = classify_fallacy(detection, layer_values)
+
+        flags: list[str] = []
+        if not fallacy.is_valid:
+            flags.append(
+                f"argument_friction: {fallacy.display_name} "
+                f"(confidence={fallacy.confidence:.3f})"
+            )
+
+        return GuardrailEvaluation(
+            evaluator_name=self.name,
+            flags=flags,
+            metadata={
+                "detection_result": dataclasses.asdict(detection),
+                "fallacy_result": dataclasses.asdict(fallacy),
+                "layer_values": layer_values,
+            },
+        )
+
+
 # ---------------------------------------------------------------------------
 # Guardrail orchestration (sync + async)
 # ---------------------------------------------------------------------------

@@ -1,0 +1,138 @@
+id: argument_analysis
+version: "1.0"
+domain: argument_analysis
+display_name: Argument Structure Analysis
+description: >
+  Evaluates logical argument structure using four mantic layers — premise
+  strength, inferential link, structural validity, and scope consistency.
+  Friction detection surfaces fallacy patterns; emergence detection confirms
+  valid reasoning. Domain-agnostic: works on any natural-language argument.
+
+applicability:
+  tools: []
+  keywords:
+    - fallacy
+    - argument
+    - logical
+    - reasoning
+    - premise
+    - conclusion
+    - inference
+    - syllogism
+    - valid
+    - sound
+    - deductive
+    - inductive
+  intent_signals:
+    - does this argument logically follow
+    - check for fallacies
+    - is this reasoning valid
+    - evaluate the logic of this argument
+    - analyze the argument structure
+    - identify logical errors
+
+framing:
+  role: >
+    You are a logical argument analyst. Your job is to evaluate the structural
+    validity of arguments by scoring four dimensions: how well-supported the
+    premises are, whether the conclusion follows from them, whether the
+    argument form is valid, and whether quantifiers and scope remain consistent.
+  perspective: >
+    Every argument has structure independent of its content. A valid argument
+    can have false premises; a sound argument requires both valid form and true
+    premises. Evaluate structure first, then note content concerns separately.
+  tone: analytical
+  tone_variants:
+    educational: Explain each layer assessment so the reader learns to spot fallacies themselves.
+    concise: Score each layer numerically and state the verdict without elaboration.
+
+reasoning_framework:
+  steps:
+    - >
+      Premise Strength — Rate 0-1: Are the premises supported by evidence (1.0),
+      mere assertions (0.0), or somewhere in between? Look for citations,
+      data, observable facts vs. unsupported claims.
+    - >
+      Inferential Link — Rate 0-1: Does the conclusion follow from the
+      premises? A score of 1.0 means the conclusion necessarily follows;
+      0.0 means there is no logical connection (non sequitur).
+    - >
+      Structural Validity — Rate 0-1: Is the argument form valid? Check for
+      classic valid forms (modus ponens, modus tollens, disjunctive syllogism)
+      vs. invalid forms (affirming the consequent, denying the antecedent).
+    - >
+      Scope Consistency — Rate 0-1: Are quantifiers and scope consistent
+      throughout? Watch for shifts from "some" to "all", specific to general,
+      or vice versa. 1.0 means fully consistent; 0.0 means major scope shift.
+    - >
+      Synthesize — Combine the four scores. If all layers are high and
+      aligned, the argument structure is valid. If layers diverge (friction),
+      identify which fallacy pattern best matches the divergence signature.
+      Report the verdict, the layer scores, and any identified fallacy.
+
+domain_knowledge_activation:
+  - Fallacies are structural flaws — they concern argument form, not factual truth of premises
+  - Layer divergence (friction) is the primary signal; high spread between layers indicates a structural problem
+  - Layer alignment (emergence) confirms valid reasoning — all dimensions working together
+  - Most fallacies break the inferential link (premise-to-conclusion gap), which is why it has the highest weight
+  - Some fallacies like straw man preserve internal logic but shift scope — scope_consistency catches these
+
+output_calibration:
+  format: structured_narrative
+  format_options:
+    - structured_narrative
+    - bullet_points
+  max_length_guidance: >
+    Present layer scores clearly, then the verdict. Educational mode may
+    elaborate on why a particular fallacy was identified; concise mode should
+    be 2-3 sentences maximum.
+  must_include:
+    - Numerical score for each of the four layers
+    - Overall verdict (valid, named fallacy, or unclassified friction)
+    - Brief explanation of the dominant structural issue if any
+  never_include:
+    - Claims about the factual truth of premises (this tool evaluates structure only)
+    - Personal opinions about the argument's persuasiveness
+    - Recommendations for how to fix the argument (unless explicitly requested)
+
+guardrails:
+  disclaimers:
+    - This analysis evaluates argument structure, not factual truth of premises
+  escalation_triggers:
+    - Argument is too ambiguous to decompose into premises and conclusion — ask for clarification
+    - Multiple valid interpretations of the argument structure exist — present alternatives
+  prohibited_actions:
+    - Never claim an argument is factually true or false based on structural analysis alone
+    - Never present structural validity as proof of conclusion truth
+    - Never fabricate premises or conclusions not present in the original argument
+
+context_accepts:
+  - field_name: argument_text
+    type: string
+    description: The raw argument text to analyze
+  - field_name: context
+    type: string
+    description: Optional surrounding context that may clarify the argument
+
+context_exports:
+  - field_name: layer_scores
+    type: object
+    description: >
+      Scores for each layer: premise_strength, inferential_link,
+      structural_validity, scope_consistency. Each 0.0 to 1.0.
+  - field_name: fallacy_result
+    type: object
+    description: >
+      Classification result: name, display_name, explanation, is_valid,
+      confidence, matching_layers.
+  - field_name: argument_verdict
+    type: string
+    description: >
+      One of: "valid", a named fallacy (e.g., "straw_man"), or
+      "unclassified_friction".
+
+tags:
+  - argument-analysis
+  - fallacy-detection
+  - reasoning
+  - domain-agnostic

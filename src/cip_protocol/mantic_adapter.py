@@ -74,7 +74,6 @@ class NativeBackend:
             raise ValueError("mode must be 'friction' or 'emergence'")
 
         w = list(weights) if weights is not None else [1.0 / n] * n
-        layers = dict(zip(layer_names, layer_values))
 
         # M = sum(W_i * L_i) * f_time / sqrt(N)
         total = sum(w[i] * layer_values[i] for i in range(n))
@@ -349,4 +348,196 @@ def detect_policy_conflict(
         domain_name="cip_policy",
         backend=backend,
         detection_threshold=detection_threshold,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Argument structure analysis
+# ---------------------------------------------------------------------------
+
+_ARGUMENT_LAYERS = [
+    "premise_strength",
+    "inferential_link",
+    "structural_validity",
+    "scope_consistency",
+]
+
+_ARGUMENT_WEIGHTS = [0.25, 0.30, 0.25, 0.20]
+
+
+def detect_argument_friction(
+    *,
+    layer_values: list[float] | tuple[float, ...],
+    backend: Backend = "auto",
+    detection_threshold: float = 0.4,
+) -> DetectionResult:
+    """Argument structure friction detection — surfaces fallacy patterns.
+
+    Layer order: premise_strength, inferential_link, structural_validity,
+    scope_consistency.  Weights: [0.25, 0.30, 0.25, 0.20] — inferential link
+    highest because most fallacies break the premise-to-conclusion link.
+    """
+    if len(layer_values) != 4:
+        raise ValueError("exactly 4 layer values required for argument analysis")
+    clamped = [_clamp(v) for v in layer_values]
+    return detect(
+        layer_names=_ARGUMENT_LAYERS,
+        layer_values=clamped,
+        weights=_ARGUMENT_WEIGHTS,
+        mode="friction",
+        domain_name="cip_argument",
+        backend=backend,
+        detection_threshold=detection_threshold,
+    )
+
+
+@dataclass(frozen=True)
+class FallacyResult:
+    """Classification result from argument structure analysis."""
+
+    name: str
+    display_name: str
+    explanation: str
+    is_valid: bool
+    confidence: float
+    matching_layers: list[str]
+
+
+# Ordered most-specific first (4-constraint, then 3, then 2).
+_FALLACY_SIGNATURES: list[dict[str, Any]] = [
+    # 4-constraint signatures
+    {
+        "name": "straw_man",
+        "display_name": "Straw Man",
+        "explanation": (
+            "The argument misrepresents the original position by shifting "
+            "scope while maintaining internal logic."
+        ),
+        "predicate": lambda v: (
+            v["premise_strength"] > 0.4
+            and v["inferential_link"] > 0.4
+            and v["structural_validity"] > 0.4
+            and v["scope_consistency"] < 0.3
+        ),
+    },
+    {
+        "name": "false_dilemma",
+        "display_name": "False Dilemma",
+        "explanation": (
+            "The argument presents a limited set of options while ignoring "
+            "valid alternatives."
+        ),
+        "predicate": lambda v: (
+            v["premise_strength"] > 0.5
+            and v["inferential_link"] > 0.4
+            and v["structural_validity"] < 0.4
+            and v["scope_consistency"] < 0.3
+        ),
+    },
+    # 3-constraint signatures
+    {
+        "name": "affirming_the_consequent",
+        "display_name": "Affirming the Consequent",
+        "explanation": (
+            "The argument assumes that because the consequent is true, "
+            "the antecedent must be true."
+        ),
+        "predicate": lambda v: (
+            v["premise_strength"] > 0.6
+            and v["inferential_link"] < 0.3
+            and v["structural_validity"] < 0.35
+        ),
+    },
+    {
+        "name": "circular_reasoning",
+        "display_name": "Circular Reasoning",
+        "explanation": "The conclusion is assumed in the premises, creating a logical circle.",
+        "predicate": lambda v: (
+            v["inferential_link"] > 0.6
+            and v["structural_validity"] < 0.3
+            and v["premise_strength"] < 0.5
+        ),
+    },
+    {
+        "name": "appeal_to_authority",
+        "display_name": "Appeal to Authority",
+        "explanation": (
+            "The argument relies on authority rather than evidence to support "
+            "the premises."
+        ),
+        "predicate": lambda v: (
+            v["premise_strength"] < 0.3
+            and v["inferential_link"] > 0.5
+            and v["structural_validity"] > 0.5
+        ),
+    },
+    # 2-constraint signatures
+    {
+        "name": "hasty_generalization",
+        "display_name": "Hasty Generalization",
+        "explanation": (
+            "The argument draws a broad conclusion from insufficient or "
+            "unrepresentative evidence."
+        ),
+        "predicate": lambda v: 0.4 < v["premise_strength"] < 0.7 and v["scope_consistency"] < 0.3,
+    },
+    {
+        "name": "non_sequitur",
+        "display_name": "Non Sequitur",
+        "explanation": "The conclusion does not logically follow from the premises.",
+        "predicate": lambda v: (
+            v["premise_strength"] > 0.4
+            and v["inferential_link"] < 0.2
+            and v["structural_validity"] > 0.4
+        ),
+    },
+]
+
+
+def classify_fallacy(
+    result: DetectionResult,
+    layer_values: dict[str, float],
+) -> FallacyResult:
+    """Classify a fallacy from a detection result and its layer values.
+
+    If no friction is detected, the argument is considered valid.
+    If friction is detected but no signature matches, returns
+    ``unclassified_friction``.
+    """
+    if result.signal != "friction_detected":
+        return FallacyResult(
+            name="valid_argument",
+            display_name="Valid Argument",
+            explanation="No structural friction detected; the argument form is consistent.",
+            is_valid=True,
+            confidence=max(0.0, min(1.0, result.coherence)),
+            matching_layers=[],
+        )
+
+    for sig in _FALLACY_SIGNATURES:
+        if sig["predicate"](layer_values):
+            # Confidence from coherence inverted: lower coherence = higher
+            # confidence that something is wrong.
+            raw_conf = max(0.0, min(1.0, 1.0 - result.coherence))
+            matching = [
+                name for name in _ARGUMENT_LAYERS
+                if name in layer_values
+            ]
+            return FallacyResult(
+                name=sig["name"],
+                display_name=sig["display_name"],
+                explanation=sig["explanation"],
+                is_valid=False,
+                confidence=raw_conf,
+                matching_layers=matching,
+            )
+
+    # Friction detected but no known signature matched.
+    return FallacyResult(
+        name="unclassified_friction",
+        display_name="Unclassified Friction",
+        explanation="Structural friction detected but no known fallacy pattern matched.",
+        is_valid=False,
+        confidence=max(0.0, min(1.0, 1.0 - result.coherence)),
+        matching_layers=list(layer_values.keys()),
     )
