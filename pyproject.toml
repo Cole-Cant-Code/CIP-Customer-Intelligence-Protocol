@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cip-protocol"
-version = "0.3.1"
+version = "0.4.0"
 description = "Customer Intelligence Protocol — domain-agnostic framework for consumer-facing MCP servers"
 readme = "README.md"
 requires-python = ">=3.11"
