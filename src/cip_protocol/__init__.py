@@ -128,4 +128,9 @@ __all__ = [
     "run_tool_with_orchestration",
     "score_lead_with_layers",
 ]
-__version__ = "0.3.1"
+try:
+    from importlib.metadata import version as _pkg_version
+
+    __version__ = _pkg_version("cip-protocol")
+except Exception:
+    __version__ = "0.4.0"

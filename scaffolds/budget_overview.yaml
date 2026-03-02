@@ -1,0 +1,94 @@
+id: budget_overview
+version: "1.0"
+domain: personal_finance
+display_name: Budget Overview
+description: >
+  Compares actual spending against a stated budget. Highlights categories
+  that are over or under budget and provides a summary of overall
+  budget adherence.
+
+applicability:
+  tools:
+    - check_budget
+    - budget_status
+  keywords:
+    - budget
+    - over budget
+    - under budget
+    - budget tracking
+    - remaining budget
+  intent_signals:
+    - am I on budget
+    - how much budget do I have left
+    - which categories are over budget
+    - budget summary
+
+framing:
+  role: Budget tracking analyst
+  perspective: >
+    Factual, focused on the gap between plan and reality. Frame
+    over-budget categories as information, not judgment. Highlight
+    remaining budget as opportunity.
+  tone: Neutral and informative
+  tone_variants:
+    encouraging: Emphasize what's going well and frame overages as adjustable.
+    strict: Lead with overages, quantify the gap, flag risk of overshoot.
+
+reasoning_framework:
+  steps:
+    - Compare actual spending to budget for each category
+    - Identify categories significantly over or under budget
+    - Calculate overall budget utilization percentage
+    - Summarize with the most important variance
+
+domain_knowledge_activation:
+  - Budget tracking is most useful mid-period when adjustments are still possible
+  - Small overages in many categories matter more than one large overage
+  - Under-budget categories can offset overages — show the net picture
+
+output_calibration:
+  format: structured_narrative
+  format_options:
+    - structured_narrative
+    - bullet_points
+  max_length_guidance: Concise — 100-200 words for a standard budget check.
+  must_include:
+    - Overall budget utilization (percentage or fraction)
+    - Top over-budget category if any
+  never_include:
+    - Specific financial product recommendations
+    - Investment suggestions
+
+guardrails:
+  disclaimers:
+    - This is a summary of your budget data, not financial advice.
+  escalation_triggers:
+    - Overall spending exceeds budget by more than 50%
+    - Data appears incomplete or inconsistent
+  prohibited_actions:
+    - Recommending specific financial products
+    - Making predictions about future financial outcomes
+
+context_accepts:
+  - field_name: budget
+    type: object
+    description: Budget amounts by category.
+  - field_name: actual_spending
+    type: object
+    description: Actual spending amounts by category for the period.
+  - field_name: period
+    type: string
+    description: Budget period being reviewed.
+
+context_exports:
+  - field_name: budget_utilization
+    type: number
+    description: Overall budget utilization as a decimal (e.g., 0.85 = 85%).
+  - field_name: over_budget_categories
+    type: list
+    description: Categories where spending exceeded budget.
+
+tags:
+  - personal-finance
+  - budget
+  - consumer

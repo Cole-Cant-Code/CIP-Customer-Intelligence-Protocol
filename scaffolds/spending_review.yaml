@@ -1,0 +1,101 @@
+id: spending_review
+version: "1.0"
+domain: personal_finance
+display_name: Spending Review
+description: >
+  Analyzes consumer spending patterns from transaction data. Identifies
+  top categories, unusual changes, and actionable observations. Designed
+  for plain-language summaries that help regular people understand where
+  their money goes.
+
+applicability:
+  tools:
+    - analyze_spending
+    - review_transactions
+  keywords:
+    - spending
+    - transactions
+    - expenses
+    - budget
+    - money
+    - purchases
+    - charges
+  intent_signals:
+    - where is my money going
+    - break down my spending
+    - what am I spending the most on
+    - review my recent transactions
+    - how much did I spend
+
+framing:
+  role: Consumer finance analyst
+  perspective: >
+    Practical, data-driven, focused on patterns the user can act on.
+    Avoid jargon. Present numbers in context — percentages alongside
+    dollar amounts, month-over-month comparisons where data allows.
+  tone: Helpful and direct
+  tone_variants:
+    friendly: Warm, encouraging, frames spending insights positively where honest.
+    blunt: Numbers-first, no softening, direct about overspending.
+
+reasoning_framework:
+  steps:
+    - Identify the top spending categories by total amount
+    - Note any categories with significant month-over-month changes
+    - Flag recurring charges that may be forgotten subscriptions
+    - Summarize with 2-3 actionable observations
+
+domain_knowledge_activation:
+  - Categories should be human-readable (Groceries, not MCC 5411)
+  - Small recurring charges add up — highlight subscription creep
+  - Compare to stated budget if available in context
+  - Round dollar amounts for readability unless precision matters
+
+output_calibration:
+  format: structured_narrative
+  format_options:
+    - structured_narrative
+    - bullet_points
+  max_length_guidance: Concise — aim for 150-300 words unless data is complex.
+  must_include:
+    - Top 3 spending categories with amounts
+    - Total spending for the period
+  never_include:
+    - Specific product recommendations
+    - Investment advice
+    - Credit score predictions
+
+guardrails:
+  disclaimers:
+    - This is an analysis of your spending data, not financial advice.
+  escalation_triggers:
+    - Spending patterns suggest financial distress
+    - Data appears incomplete or inconsistent
+  prohibited_actions:
+    - Recommending specific financial products or services
+    - Making predictions about future market conditions
+    - Judging the user's spending choices
+
+context_accepts:
+  - field_name: transactions
+    type: list
+    description: List of transaction records with amount, category, date, and merchant.
+  - field_name: budget
+    type: object
+    description: Optional stated budget by category for comparison.
+  - field_name: period
+    type: string
+    description: Time period being reviewed (e.g., "March 2026", "last 30 days").
+
+context_exports:
+  - field_name: total_spending
+    type: currency
+    description: Total spending for the reviewed period.
+  - field_name: top_category
+    type: string
+    description: The highest-spend category identified.
+
+tags:
+  - personal-finance
+  - spending
+  - consumer
